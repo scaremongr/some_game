@@ -32,10 +32,19 @@ def game(x, y, z):
 _materials = {}
 
 
+# File name markers per map: Poly Haven (`_diff_1k.jpg`) and ambientCG
+# (`_Color.jpg`) naming both work, so either library can be dropped in.
+TEXTURE_MARKERS = {
+    "diff": ("_diff_", "_color."),
+    "rough": ("_rough_", "_roughness."),
+    "nor_gl": ("_nor_gl_", "_normalgl."),
+}
+
+
 def texture_path(tex, kind):
     folder = os.path.join(ROOT, "textures", tex)
-    for f in os.listdir(folder):
-        if f"_{kind}_" in f.lower():
+    for f in sorted(os.listdir(folder)):
+        if any(m in f.lower() for m in TEXTURE_MARKERS.get(kind, (f"_{kind}_",))):
             return os.path.join(folder, f)
     return None
 
@@ -330,12 +339,13 @@ def decimate(o, budget):
 
 def place(asset, owner, x, z, rot=0.0, fit=("h", 1.0), y=0.0, tint=None, stretch=None,
           recolor=None, nometal=False, glow=None, tris=5000):
-    """Imports a Poly Haven model, scales it to `fit` (height 'h', width 'w'
-    or depth 'd' in metres), stands it on y and turns it `rot` degrees
-    (0 = facing the camera)."""
+    """Imports a model from assets-src/room/models/<asset>/ (a .gltf or .glb:
+    Poly Haven, Sketchfab or any other source), scales it to `fit` (height
+    'h', width 'w' or depth 'd' in metres), stands it on y and turns it
+    `rot` degrees (0 = facing the camera)."""
     before = set(bpy.data.objects)
     folder = os.path.join(ROOT, "models", asset)
-    gltf = next(f for f in os.listdir(folder) if f.endswith(".gltf"))
+    gltf = next(f for f in sorted(os.listdir(folder)) if f.lower().endswith((".gltf", ".glb")))
     bpy.ops.import_scene.gltf(filepath=os.path.join(folder, gltf))
     new = [o for o in bpy.data.objects if o not in before]
     meshes = [o for o in new if o.type == "MESH"]

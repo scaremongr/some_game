@@ -117,6 +117,7 @@ Principles:
   pieces split by loose parts) → `assets/room.glb`. The permanent exterior
   shell is in fixed groups; only furnishings and interior dividers scatter.
   Rendered unlit (`pipeline_baked`); fighters get a matching light rig.
+  Adding furniture: sources, licences and steps in §12.
 
 ## 5. Combat core essentials (`combat/`)
 
@@ -194,6 +195,8 @@ Principles:
   `assets/bot/*.jpg`, fighter portraits `assets/fighters/*.jpg`,
   `assets/fighters/roster.json`, `assets-src/fight/clips.txt` (the clip list),
   `tools/mixamo-fight-list.json`.
+- Room furniture and materials: only CC0 or CC-BY (with `CREDITS.md`) —
+  where to get them and how to add them: §12.
 - Legacy dance assets (`assets/moves`, `assets/music`, `character_old.glb`,
   `character_not_rigged.glb`) are not in git and not used by the fight.
 - Roster: `assets/fighters/roster.json` (`id, name, model, pack, portrait`);
@@ -302,3 +305,149 @@ quests and streaks, tournaments, cosmetics for Telegram Stars (betting Stars on
 matches is not allowed by Telegram rules), post-processing (bloom, grading),
 fighter shadows on furniture, compression of `room.glb`, balance tuning with
 real players.
+
+## 12. Filling the apartment: where to get assets and how to add them
+
+The arena is built in Blender by `tools/room/build_room.py` and baked by
+`tools/room/bake_room.py` into `assets/room.glb` (§4). More and better
+furniture means: download a model into `assets-src/room/models/<id>/`, place
+it with one `place(...)` line, preview, bake, check in game, ship.
+
+### 12.1 Licence rules (the repository and `room.glb` are public)
+
+`room.glb` is committed to a public repo and served to every player, so only
+assets whose licence allows **redistribution in a modified form** may go in:
+
+| Licence | Use? | Obligations |
+|---|---|---|
+| CC0 / public domain | yes, preferred | none |
+| CC-BY 4.0 | yes | add a line to `CREDITS.md` (title, author, link, licence) — create the file with the first such asset |
+| CC-BY-SA | avoid | share-alike would pull `room.glb` under SA |
+| CC-BY-NC / NC-* | no | the game may be monetised (Stars) |
+| CC-BY-ND / ND-* | no | decimation, recolouring and the bake are derivatives |
+| "Standard", "Editorial", store/royalty-free licences (Sketchfab Standard, TurboSquid, CGTrader, BlenderKit RF, Unity/Unreal store) | no | forbid standalone redistribution; `room.glb` in a public repo is exactly that |
+| AI-generated (Meshy, Tripo, Rodin, …) | only if the service grants you the output under a free licence; check the plan | note the source in `CREDITS.md` |
+
+Downloaded sources stay out of git (`assets-src/` is ignored); record in the
+`MODELS`/`TEXTURES` lists or in comments where each one came from.
+
+### 12.2 Sources, best first
+
+1. **Poly Haven** — https://polyhaven.com/models (CC0, photoreal, glTF, the
+   style of the current room). API, no key, but a `User-Agent` header is
+   required (403 without):
+   - list: `https://api.polyhaven.com/assets?t=models` (also `t=textures`,
+     `t=hdris`); each asset has `categories` (`furniture, seating, table,
+     shelves, lighting, decorative, electronics, appliances, containers,
+     plants`, …);
+   - files: `https://api.polyhaven.com/files/<id>` → `gltf["1k"]["gltf"]`
+     (`url` + `include` map of `.bin` and textures). A few assets have no glTF.
+   - **Easiest path**: add the id to `MODELS` (or `TEXTURES`) in
+     `tools/room/fetch_polyhaven.py` and run `python tools/room/fetch_polyhaven.py`
+     (skips what is already downloaded).
+   - Already used: Sofa_01, ArmChair_01, Ottoman_01, CoffeeTable_01,
+     round_wooden_table_01, painted_wooden_chair_01/02, painted_wooden_cabinet_02,
+     vintage_cabinet_01, wooden_bookshelf_worn, potted_plant_02/04,
+     modern_ceiling_lamp_01, picture frames, wall_clock, throw_pillows_01,
+     wicker_basket_01, vases, mantel_clock_01, book sets, side tables, WoodenTable_02.
+   - Good unused candidates for a 90s sitcom flat (all have glTF, checked):
+     seating `sofa_02, sofa_03, mid_century_lounge_chair, modern_arm_chair_01,
+     GreenChair_01, Rockingchair_01, vintage_day_bed, painted_wooden_sofa,
+     dining_chair_02, WoodenChair_01, bar_chair_round_01, metal_stool_01..03,
+     wooden_stool_01/02, painted_wooden_stool, folding_wooden_stool`;
+     tables `dining_table, coffee_table_round_01, modern_coffee_table_01/02,
+     industrial_coffee_table, WoodenTable_01/03, small_wooden_table_01,
+     round_wooden_table_02, painted_wooden_table, ClassicConsole_01,
+     ClassicNightstand_01, painted_wooden_nightstand`; storage
+     `Shelf_01, painted_wooden_shelves, wooden_display_shelves_01,
+     steel_frame_shelves_01..03, drawer_cabinet, modern_wooden_cabinet,
+     vintage_wooden_drawer_01, painted_wooden_cabinet`; lighting
+     `Chandelier_01..03, desk_lamp_arm_01, industrial_pipe_lamp,
+     industrial_wall_lamp, industrial_wall_sconce, caged_hanging_light,
+     vintage_oil_lamp, lantern_chandelier_01`; electronics and kitchen
+     `Television_01, television_02, boombox, cassette_player, gaming_console,
+     classic_laptop, vintage_radio_transceiver, vintage_microwave,
+     vintage_electric_kettle, electric_stove, CoffeeCart_01, ceiling_fan`;
+     decor `ornate_mirror_01, standing_picture_frame_01/02,
+     hanging_picture_frame_01, vintage_grandfather_clock_01,
+     vintage_telephone_wall_clock, alarm_clock_01, chess_set, dartboard,
+     marble_bust_01, concrete_cat_statue, rubber_duck_toy, vintage_suitcase,
+     wooden_bowl_01/02, jug_01, brass_candleholders, wooden_candlestick,
+     ceramic_vase_02..04, brass_vase_03/04, antique_ceramic_vase_01,
+     wine_bottles_01, wicker_basket_02, cardboard_box_01`; plants
+     `potted_plant_01, anthurium_botany_01, calathea_orbifolia_01,
+     pachira_aquatica_01, fern_02, planter_pot_clay, planter_box_01..03`.
+   - Textures (walls, floors, fabrics, tiles): `t=textures`; HDRIs (`t=hdris`)
+     could replace the flat sky colour in `build()` for richer window light.
+2. **ambientCG** — https://ambientcg.com (CC0 PBR materials: wallpaper,
+   fabric, tiles, wood, plaster). API:
+   `https://ambientcg.com/api/v2/full_json?type=Material&q=wallpaper&include=downloadData`;
+   download `https://ambientcg.com/get?file=<AssetId>_1K-JPG.zip` (e.g.
+   `Wallpaper001A_1K-JPG.zip`). Unzip into
+   `assets-src/room/textures/<AssetId>/`; `surface("<name>", "<AssetId>", …)`
+   finds `_Color`/`_Roughness` files as well as Poly Haven's `_diff_`/`_rough_`.
+3. **Sketchfab** — https://sketchfab.com (huge choice; licence per model).
+   Search with a licence filter (no key needed):
+   `https://api.sketchfab.com/v3/search?type=models&downloadable=true&license=cc0&q=refrigerator`
+   (`license=by` for CC-BY). Download needs the owner's Sketchfab API token
+   (account settings → Password & API): `GET
+   https://api.sketchfab.com/v3/models/<uid>/download` with header
+   `Authorization: Token <token>` → `gltf.url` (a zip with `scene.gltf`,
+   `scene.bin`, `textures/`). Unzip into `assets-src/room/models/<id>/`. Check
+   the face count (`faceCount` in search results) and prefer realistic,
+   PBR-textured models; many are game-ready low-poly.
+4. **Kenney** (https://kenney.nl, CC0) and **Quaternius** (CC0) — furniture
+   kits, but stylised/low-poly: they clash with the photoreal room. Only for
+   deliberate stylistic changes.
+5. **Build it** — walls, counters, shelves, frames, doors and anything boxy
+   are made in code with `box(...)` / `grid_wall(...)` in `build_room.py` using
+   CC0 textures; procedural materials (see `rug_material()`) cover rugs,
+   posters and patterns. Iconic sitcom details (a yellow frame around the door
+   peephole, a coat rack, a foosball table, bar stools at the counter,
+   mismatched dining chairs) are cheap this way. Evoke the style; do not
+   copy a real TV set or logos one to one.
+
+### 12.3 Adding a model
+
+1. Download into `assets-src/room/models/<id>/` (one folder per model with a
+   `.gltf` or `.glb`; `place()` imports the first one it finds).
+2. In `build()` (`tools/room/build_room.py`) add, e.g.:
+   ```python
+   place("Television_01", 12, 3.2, -1.5, -20, ("h", 0.55), y=0.9, tris=3000)
+   ```
+   `place(asset, owner, x, z, rot_deg, fit, y=0, tint=None, recolor=None,
+   nometal=False, glow=None, tris=5000)`: `fit` scales to a height/width/depth
+   in metres (`("h", 0.55)`); `rot` 0 faces the camera; `tint` multiplies the
+   colour, `recolor=((r,g,b), gain)` changes hue keeping the texture,
+   `nometal` fixes models that bake too dark, `glow={"part": (color, strength)}`
+   makes material parts emissive (lamps); `tris` is the decimation budget.
+3. **Coordinates** (game space, metres): x right, y up, z towards the camera.
+   Back wall at z = −1.8; the fighters' lane is z ≈ 0 — keep tall furniture at
+   z ≤ −0.6 and nothing at z > 0.6 (it would hide the fight; the camera looks
+   from z ≈ 5). Central room between dividers at x = ±3.34; side rooms behind
+   the partitions at x = ±4.65, fighters reach them up to x = ±6.4 once both
+   walls are broken; kitchen on the left, sofa area on the right.
+4. **Owner** (what breaks it): `-1` fixed, never breaks; otherwise the id of a
+   combat room object from `combat/src/room.rs` — the piece breaks when that
+   object does. Breakable ids and their places (x, z in mm): 5/6 windows
+   (∓2600, −1680), 7/8 tables (∓1450, −700), 9/10 stools (∓600/650, −650),
+   11/12 cabinets (∓3750, −950), 13/14 lamps (∓1600, −450), 15 planter
+   (0, −1250), 16/17 floor sections (∓2100, 0), 18/19 side partitions (∓4650),
+   20/21 the arena dividers (±3340). Ids 0–4 are the permanent back wall. Give a
+   new prop the id of the nearest object so it breaks with it; a new
+   independent breakable needs a new entry in `LAYOUT` (combat change: state
+   size, tests, `arena_props` owners, deploy of server and client together).
+5. **Budgets** (phones): the room is ~130–150k triangles and `room.glb`
+   ~9 MB. Keep a prop at 1.5–6k triangles (`tris=`), the room under ~200k and
+   the file under ~12 MB. Texture resolution comes from the bake: `DETAIL` and
+   `LIMIT` per group in `bake_room.py` (texels per metre, max side).
+6. Preview (seconds, Cycles on GPU):
+   `blender -b --factory-startup --python tools/room/build_room.py -- --preview out.png [--view left|right] [--samples 96]`
+   — look at the picture; fix scale, rotation, colour.
+7. Bake (~2–4 min on an RTX 4090; much slower on CPU, lower `--samples`):
+   `blender -b --factory-startup --python tools/room/bake_room.py -- --out assets/room.glb --samples 384`.
+8. Check in game: `.\build-web.ps1`, then a pose sheet or
+   `node scripts/fight-video.mjs <dir> moves` (breaks things) and look at the
+   frames: nothing in the lane, pieces fly sensibly, no black faces. Run the
+   tests (`arena_props` checks that every breakable object has pieces), deploy,
+   commit (`room.glb` included; add `CREDITS.md` lines for CC-BY).

@@ -15,3 +15,5 @@ Rules agreed with the owner:
   be committed: the repository is public. `python tools/fetch-assets.py` restores them.
 - Check visuals by rendering (pose sheets, fight videos) and looking at the frames,
   not only by tests.
+- More furniture for the apartment: ARCHITECTURE.md §12 (sources, licences, steps).
+  Only CC0 / CC-BY assets: `room.glb` is public.
