@@ -255,43 +255,14 @@ impl ArenaProps {
                 _ => {}
             }
         }
-        for side in 0..2 {
-            for i in 0..12 {
-                this.add(
-                    20 + side,
-                    vec3(
-                        if side == 0 { -3.34 } else { 3.34 },
-                        0.24 + (i / 3) as f32 * 0.48,
-                        (i % 3) as f32 * 0.45 - 0.45,
-                    ),
-                    vec3(0.16, 0.45, 0.42),
-                    wood * (0.8 + (i % 3) as f32 * 0.12),
-                );
-            }
-        }
-        // Fixed shell around the room (owner 22, never breaks): broken walls
-        // open onto a loading bay instead of empty space.
-        let shell = vec3(0.13, 0.155, 0.18);
-        let slab = vec3(0.15, 0.17, 0.19);
-        let lamp = vec3(1.0, 0.78, 0.45);
+        // Permanent exterior and continuous floor, including the open doorways.
+        this.add(22, vec3(0.0, -0.055, 0.0), vec3(24.4, 0.10, 8.0), stone);
+        this.add(22, vec3(0.0, 1.8, -3.5), vec3(24.4, 3.6, 0.2), stone);
         for side in [-1.0f32, 1.0] {
-            for k in 0..3 {
-                let x = side * (4.55 + k as f32 * 1.5);
-                this.add(22, vec3(x, -0.04, -0.2), vec3(1.48, 0.06, 3.9), slab * (0.9 + k as f32 * 0.05));
-            }
-            this.add(22, vec3(side * 7.0, 1.9, -0.4), vec3(0.3, 3.9, 3.6), shell * 0.9);
-            this.add(22, vec3(side * 6.0, 3.55, -0.4), vec3(2.2, 0.16, 3.6), shell * 0.7);
+            this.add(22, vec3(side * 12.1, 1.8, -1.0), vec3(0.2, 3.6, 5.0), stone);
         }
-        for k in 0..3 {
-            let x = -6.2 + k as f32 * 6.2;
-            this.add(22, vec3(x, -0.05, 3.9), vec3(6.18, 0.06, 4.0), slab * (0.82 + k as f32 * 0.04));
-        }
-        for k in 0..8 {
-            let x = -7.0 + k as f32 * 2.0;
-            this.add(22, vec3(x, 1.9, -2.45), vec3(1.98, 3.9, 0.3), shell * (0.85 + (k % 2) as f32 * 0.08));
-            if k % 2 == 1 {
-                this.add(22, vec3(x, 2.35, -2.28), vec3(1.1, 0.5, 0.05), lamp * 0.55);
-            }
+        for x in [-8.0, -3.0, 3.0, 8.0] {
+            this.add(22, vec3(x, 1.8, -2.5), vec3(0.18, 3.6, 1.8), stone);
         }
         this
     }
@@ -307,8 +278,8 @@ impl ArenaProps {
         });
     }
     /// Replaces the box room with the baked apartment. Nodes named
-    /// `oNN_kkk` / `glassNN_kkk` are pieces of room object NN (20 and 21 are
-    /// the arena walls); everything else is fixed.
+    /// `oNN_kkk` / `glassNN_kkk` are pieces of room object NN (5..19);
+    /// everything else is fixed.
     pub fn set_room(&mut self, bytes: &[u8]) -> Result<usize, String> {
         let scene = gltf::load_scene(bytes)?;
         let mut parts = Vec::new();
@@ -462,7 +433,7 @@ impl ArenaProps {
                         .wrapping_add((i as u32).wrapping_mul(1013904223))
                         .rotate_left(i as u32);
                     let r = (hash % 1000) as f32 / 1000.0;
-                    let floor = owner == 16 || owner == 17;
+                    let floor = LAYOUT.get(owner).is_some_and(|d| d.kind == 7);
                     // Big pieces of the baked room are heavy: they topple and
                     // slide instead of flying across the room.
                     let heft = if p.piece { heft(p.size) } else { 1.0 };
@@ -510,14 +481,8 @@ impl ArenaProps {
                         let big = p.piece && heft(p.size) < 0.5;
                         match owner {
                             // Big pieces stay against the back wall, out of the lane.
-                            0..=15 if big => f.position.z = f.position.z.min(-1.0),
-                            0..=15 => f.position.z = f.position.z.min(-0.55),
-                            // Side partitions fall outward into the hallway.
-                            18 | 19 if p.piece => {
-                                let side = if owner == 18 { -1.0 } else { 1.0 };
-                                f.position.x = side * (f.position.x * side).max(4.45);
-                                f.position.z = f.position.z.min(0.8);
-                            }
+                            0..=19 if big => f.position.z = f.position.z.min(-1.0),
+                            0..=19 => f.position.z = f.position.z.min(-0.55),
                             20 | 21 => f.position.z = f.position.z.min(0.8),
                             _ => {}
                         }
@@ -528,7 +493,7 @@ impl ArenaProps {
         }
         // Chunks lying in the lane are kicked aside instead of clipping feet.
         for (i, p) in self.parts.iter_mut().enumerate() {
-            if p.owner == 16 || p.owner == 17 {
+            if LAYOUT.get(p.owner).is_some_and(|d| d.kind == 7) {
                 continue;
             }
             let Some(f) = &mut p.fragment else { continue };
@@ -656,8 +621,14 @@ mod tests {
         let mut room = ArenaProps::new();
         let pieces = room.set_room(&bytes).unwrap();
         assert!(pieces > 200, "{pieces} pieces");
-        for id in 5..22 {
+        for id in 5..20 {
             assert!(room.parts.iter().any(|p| p.owner == id && p.piece), "owner {id}");
+        }
+        // Intact props must leave the fighting lane clear too (an imported
+        // table's long axis once hid the fighters' legs before it broke).
+        for p in &room.parts {
+            assert!(p.position.z + p.size.z * 0.5 < -0.25,
+                "owner {} reaches into the fighting lane", p.owner);
         }
         // Break everything: pieces fall, stay finite and out of the lane.
         let mut state = Match::new(4);
@@ -677,7 +648,7 @@ mod tests {
         for p in &room.parts {
             let f = p.fragment.as_ref().unwrap();
             assert!(f.position.x.is_finite() && f.position.y >= -0.01, "{:?}", f.position);
-            if p.owner < 16 && heft(p.size) < 0.5 {
+            if p.owner < 20 && heft(p.size) < 0.5 {
                 assert!(f.position.z <= -1.0 + 1e-4);
             }
         }
@@ -686,7 +657,7 @@ mod tests {
     #[test]
     fn every_visible_part_has_a_durable_owner_and_reset_restores_it() {
         let mut room = ArenaProps::new();
-        for id in 5..22 {
+        for id in 5..20 {
             assert!(room.parts.iter().any(|p| p.owner == id));
         }
         assert!(room.parts.len() < 400);

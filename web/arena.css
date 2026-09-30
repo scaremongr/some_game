@@ -191,6 +191,7 @@ body.touch.portrait .fighter-name{font-size:10px;gap:4px;margin-bottom:6px}
 body.touch.portrait .round-info{min-width:46px}
 body.touch.portrait .round-info strong{font-size:28px}
 body.touch.portrait .round-info span{font-size:6px;letter-spacing:.5px}
+body.touch.portrait #room-name{position:fixed;top:calc(var(--st) + 108px);left:50%;transform:translateX(-50%);font-size:8px;letter-spacing:1px;color:var(--gold);text-shadow:0 1px 5px #000}
 body.touch.portrait .health-track{height:10px}
 body.touch.portrait #announcement{font-size:30px;top:25%}
 body.touch.portrait #combat-event{top:31%;font-size:11px}

@@ -187,6 +187,8 @@ impl FightScene {
     fn accept(&mut self, state: Match) {
         let reset = self.timeline.push(state.clone());
         if reset || self.state.round != state.round {
+            self.view_center = (state.fighters[0].x + state.fighters[1].x) as f32 / 2000.0;
+            self.view_distance = 5.0;
             self.props.reset();
             self.effects.clear();
             self.pending.clear();
@@ -383,11 +385,7 @@ impl FightScene {
                     }
                 }
             }
-            let bound = |side: usize| {
-                if current.walls[side].hp > 0 { 2.95 }
-                else if current.objects[18 + side].hp > 0 { 4.45 }
-                else { 6.35 }
-            };
+            let bound = arena_combat::room::ARENA_LIMIT as f32 / 1000.0 - 0.05;
             let view = View {
                 dt,
                 time: self.time,
@@ -397,7 +395,7 @@ impl FightScene {
                 freeze: current.freeze,
                 victim: current.event_target.min(1),
                 reaction: self.reaction,
-                bounds: [-bound(0), bound(1)],
+                bounds: [-bound, bound],
                 preview,
             };
             model.update(&visual, &self.bodies, &view);
@@ -792,9 +790,8 @@ impl Scene for FightScene {
                 let team = Color::hex(if i == 0 { 0x57F0CE } else { 0xFF7965 });
                 let flash = self.hit_flash[i];
                 let white = Color::hex(0xFFFFFF);
-                // The east annex has a cool lamp; blend it in as a fighter
-                // crosses the divider so the model matches the baked room.
-                let cool = ((self.bodies[i].x - 3.2) / 1.5).clamp(0.0, 1.0);
+                // Window light in the garden gradually replaces the warm pendants.
+                let cool = ((-self.bodies[i].x - 7.8) / 1.5).clamp(0.0, 1.0);
                 let east = Color::hex(0xC7DDFF);
                 let key_color = Color {
                     r: lighting.key_color.r + (east.r - lighting.key_color.r) * cool,

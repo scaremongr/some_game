@@ -363,7 +363,7 @@ function accept(next, isPaused = false) {
   if (!fighting()) return;
   if (wallRound !== state.round || state.tick < 5) { wallImpacts = [0, 0]; wallRound = state.round; }
   state.walls.forEach((wall, i) => {
-    if (wall.impacts > wallImpacts[i]) { eventUntil = performance.now() + 1100; text('combat-event', wall.hp === 0 ? 'СТЕНА РАЗРУШЕНА · +6 УРОНА' : 'УДАР О СТЕНУ'); tone(1); haptic('heavy'); }
+    if (wall.impacts > wallImpacts[i]) { eventUntil = performance.now() + 1100; text('combat-event', 'УДАР О СТЕНУ'); tone(1); haptic('heavy'); }
     wallImpacts[i] = wall.impacts;
   });
   for (let i = 0; i < 2; i++) {
@@ -374,6 +374,8 @@ function accept(next, isPaused = false) {
   }
   text('timer', Math.ceil(state.remaining / 60)); text('round', 'РАУНД ' + state.round);
   const mine = state.fighters[side];
+  const roomIndex = mine.x < -8000 ? 0 : mine.x < -3000 ? 1 : mine.x < 3000 ? 2 : mine.x < 8000 ? 3 : 4;
+  text('room-name', ['ЗИМНИЙ САД', 'КУХНЯ', 'ГОСТИНАЯ', 'КАБИНЕТ', 'СПАЛЬНЯ'][roomIndex]);
   text('combo-readout', mine.combo > 1 && mine.combo_time > 0 ? `${mine.combo} УДАРА · ${mine.combo_damage}% УРОНА` : '');
   text('room-damage', 'РАЗРУШИТЬ · ' + Math.round(state.objects.filter(o => o.hp === 0).length / state.objects.length * 100) + '%');
   const special = document.querySelector('.act.special');
@@ -666,7 +668,7 @@ try {
       // The apartment is waited for (up to 25 s) so the box room never flashes.
       const room = window.arenaRoomStatus || 0;
       if (window.wasm_exports && window.arenaModelStatus === 1 && (room !== 0 || performance.now() - started > 25000)) { viewport(); resolve(); }
-      else if (window.arenaModelStatus === 1) { text('load-status', 'ОБСТАВЛЯЕМ КВАРТИРУ · 6,5 МБ'); setTimeout(ready, 50); }
+      else if (window.arenaModelStatus === 1) { text('load-status', 'ОБСТАВЛЯЕМ ПЯТЬ КОМНАТ'); setTimeout(ready, 50); }
       else if (window.arenaModelStatus === -1) reject(Error('Не удалось загрузить персонажа. Обновите страницу, чтобы повторить.'));
       else if (performance.now() - started > 45000) reject(Error('Персонаж не загрузился. Проверьте сеть и обновите страницу.'));
       else { if (window.wasm_exports) text('load-status', 'ЗАГРУЖАЕМ ПЕРСОНАЖА · 4,2 МБ'); setTimeout(ready, 50); }

@@ -20,18 +20,7 @@ pub const INPUT_MASK: u32 = 4095;
 pub const EDGE_MASK: u32 = LIGHT | HEAVY | DASH | THROW | KICK | JUMP | SPECIAL | SMASH;
 /// Ticks on the floor after a knockdown, including the visible wake-up.
 pub const KNOCKDOWN: u32 = 72;
-const INNER_WALL: i32 = 3000;
-const PARTITION_WALL: i32 = 4500;
-const OUTER_WALL: i32 = 6400;
-fn room_bound(wall: &Wall, partition: &room::ObjectState) -> i32 {
-    if wall.hp > 0 {
-        INNER_WALL
-    } else if partition.hp > 0 {
-        PARTITION_WALL
-    } else {
-        OUTER_WALL
-    }
-}
+use room::ARENA_LIMIT;
 // action: 0 idle, 1 jab, 2 heavy, 3 dash, 4 throw, 5 stun
 #[derive(Clone, Debug, SerJson, DeJson)]
 pub struct Fighter {
@@ -245,10 +234,7 @@ impl Match {
     /// fall and slide to rest: a fighter caught mid-jump by the final blow
     /// or the timer lands instead of hanging in the air. True while moving.
     fn settle(&mut self) -> bool {
-        let bounds = [
-            -room_bound(&self.walls[0], &self.objects[18]),
-            room_bound(&self.walls[1], &self.objects[19]),
-        ];
+        let bounds = [-ARENA_LIMIT, ARENA_LIMIT];
         let mut moving = false;
         for f in &mut self.fighters {
             if f.y == 0 && f.vx == 0 {
@@ -283,7 +269,8 @@ impl Match {
             if self.phase_ticks == 0 {
                 if self.phase == 2 {
                     self.round += 1;
-                    self.fighters = [Fighter::new(-1150, 1), Fighter::new(1150, -1)];
+                    let center = room::ROUND_CENTERS[(self.round as usize - 1) % room::ROUND_CENTERS.len()];
+                    self.fighters = [Fighter::new(center - 1150, 1), Fighter::new(center + 1150, -1)];
                     self.walls = [Wall::default(), Wall::default()];
                     self.objects = room::fresh();
                     self.remaining = 3600;
@@ -461,10 +448,7 @@ impl Match {
                 }
                 f.stamina = (f.stamina + if f.guard { 3 } else { 6 }).min(1000);
             }
-            f.x = f.x.clamp(
-                -room_bound(&self.walls[0], &self.objects[18]),
-                room_bound(&self.walls[1], &self.objects[19]),
-            );
+            f.x = f.x.clamp(-ARENA_LIMIT, ARENA_LIMIT);
         }
         if let Some(side) = breaker {
             let enemy = &mut self.fighters[1 - side];
@@ -481,8 +465,8 @@ impl Match {
         // Fighters cannot cross; facing and control direction stay predictable on phones.
         if self.fighters[1].x - self.fighters[0].x < 600 {
             let mid = ((self.fighters[0].x + self.fighters[1].x) / 2).clamp(
-                -room_bound(&self.walls[0], &self.objects[18]) + 300,
-                room_bound(&self.walls[1], &self.objects[19]) - 300,
+                -ARENA_LIMIT + 300,
+                ARENA_LIMIT - 300,
             );
             self.fighters[0].x = mid - 300;
             self.fighters[1].x = mid + 300;
@@ -636,10 +620,7 @@ impl Match {
         // A held victim hangs in the thrower's grip (from the tick it is grabbed).
         for side in 0..2 {
             if self.fighters[side].held > 0 {
-                let bounds = [
-                    -room_bound(&self.walls[0], &self.objects[18]),
-                    room_bound(&self.walls[1], &self.objects[19]),
-                ];
+                let bounds = [-ARENA_LIMIT, ARENA_LIMIT];
                 let (x, facing) = (self.fighters[1 - side].x, self.fighters[1 - side].facing);
                 let v = &mut self.fighters[side];
                 v.x = (x + facing * HOLD_DISTANCE).clamp(bounds[0], bounds[1]);
@@ -742,59 +723,21 @@ impl Match {
                 let sign = if wall_side == 0 { -1 } else { 1 };
                 let wall = &mut self.walls[wall_side];
                 let outward = f.vx * sign;
-                if wall.hp > 0 && f.x * sign >= INNER_WALL {
-                    f.x = sign * INNER_WALL;
+                if wall.hp > 0 && f.x * sign >= ARENA_LIMIT {
+                    f.x = sign * ARENA_LIMIT;
                     if outward >= 35 && f.wall_cooldown == 0 {
-                        wall.hp = (wall.hp - outward / 2).max(0);
                         wall.impacts += 1;
                         wall.impulse = outward;
                         f.wall_cooldown = 30;
                         f.stun = f.stun.max(24);
                         f.recoil_v = -80;
-                        if wall.hp == 0 {
-                            wall.broken_tick = self.tick;
-                            f.hp = (f.hp - 6).max(0);
-                            // Broken panel opens extra arena space; momentum carries through.
-                            f.vx = sign * outward * 2 / 3;
-                        } else {
-                            f.vx = -sign * outward / 3;
-                        }
+                        f.vx = -sign * outward / 3;
                     } else {
                         f.vx = 0;
                     }
                 }
             }
-            // The partition between the central arena and an annex must be
-            // smashed before a fighter can enter the rest of that room.
-            for side in 0..2 {
-                if self.walls[side].hp > 0 {
-                    continue;
-                }
-                let sign = if side == 0 { -1 } else { 1 };
-                let partition = &mut self.objects[18 + side];
-                if partition.hp > 0 && f.x * sign >= PARTITION_WALL {
-                    f.x = sign * PARTITION_WALL;
-                    let outward = f.vx * sign;
-                    if outward >= 35 && f.wall_cooldown == 0 {
-                        partition.hp = (partition.hp - outward / 3).max(0);
-                        partition.impulse = outward;
-                        f.wall_cooldown = 30;
-                        f.stun = f.stun.max(20);
-                        if partition.hp == 0 {
-                            partition.broken_tick = self.tick;
-                            f.vx = sign * outward * 2 / 3;
-                        } else {
-                            f.vx = -sign * outward / 3;
-                        }
-                    } else {
-                        f.vx = 0;
-                    }
-                }
-            }
-            f.x = f.x.clamp(
-                -room_bound(&self.walls[0], &self.objects[18]),
-                room_bound(&self.walls[1], &self.objects[19]),
-            );
+            f.x = f.x.clamp(-ARENA_LIMIT, ARENA_LIMIT);
         }
     }
 }
@@ -918,10 +861,10 @@ mod tests {
     #[test]
     fn heavy_hit_has_momentum_gravity_and_wall_collision() {
         let mut m = duel();
-        m.fighters[0].x = 1900;
-        m.fighters[1].x = 2850;
+        m.fighters[0].x = ARENA_LIMIT - 1100;
+        m.fighters[1].x = ARENA_LIMIT - 150;
         run(&mut m, [HEAVY, 0], 45);
-        assert!(m.walls[1].hp < 110);
+        assert_eq!(m.walls[1].hp, 110);
         assert_eq!(m.walls[1].impacts, 1);
         assert!(m.fighters[1].hp < 100);
         run(&mut m, [0, 0], 100);
@@ -930,31 +873,21 @@ mod tests {
         assert!(m.fighters[1].recoil.abs() < 10);
     }
     #[test]
-    fn broken_wall_opens_space_and_rebuilds_next_round() {
+    fn every_room_is_reachable_without_breaking_anything() {
         let mut m = duel();
-        m.fighters[1].x = 2990;
-        m.fighters[1].vx = 270;
-        m.fighters[1].y = 10;
-        m.step([0, 0]);
-        assert_eq!(m.walls[1].hp, 0);
-        assert_eq!(m.fighters[1].hp, 94);
-        assert!(m.walls[1].broken_tick > 0);
-        run(&mut m, [0, RIGHT], 70);
-        assert!(m.fighters[1].x > 3000);
-        m.fighters[1].x = 4450;
-        m.fighters[1].vx = 20;
-        m.step([0, RIGHT]);
-        assert!(m.fighters[1].x <= PARTITION_WALL);
-        m.objects[19].hp = 0;
-        m.fighters[1].x = 6350;
-        m.fighters[1].vx = 100;
-        m.step([0, RIGHT]);
-        assert_eq!(m.fighters[1].x, OUTER_WALL);
-        m.remaining = 1;
-        m.step([0, 0]);
-        run(&mut m, [0, 0], 150);
-        assert_eq!(m.walls[1].hp, 110);
-        assert_eq!(m.walls[1].broken_tick, 0);
+        run(&mut m, [LEFT, RIGHT], 500);
+        assert_eq!(m.fighters[0].x, -ARENA_LIMIT);
+        assert_eq!(m.fighters[1].x, ARENA_LIMIT);
+        assert!(m.objects.iter().zip(room::LAYOUT).all(|(o, d)| o.hp == d.hp));
+        assert!(m.walls.iter().all(|w| w.hp == 110 && w.broken_tick == 0));
+        // Draws exercise all five starting rooms and the wrap back to living.
+        for center in room::ROUND_CENTERS.iter().cycle().skip(1).take(5) {
+            m.remaining = 1;
+            m.step([0, 0]);
+            run(&mut m, [0, 0], 270);
+            assert_eq!(m.fighters[0].x, center - 1150);
+            assert_eq!(m.fighters[1].x, center + 1150);
+        }
     }
     #[test]
     fn running_into_wall_cannot_break_it_without_hit_impulse() {
@@ -1101,8 +1034,8 @@ mod tests {
         run(&mut m, [RIGHT, LEFT], 500);
         assert!(m.fighters[1].x - m.fighters[0].x >= 600);
         run(&mut m, [LEFT, RIGHT], 500);
-        assert_eq!(m.fighters[0].x, -3000);
-        assert_eq!(m.fighters[1].x, 3000);
+        assert_eq!(m.fighters[0].x, -ARENA_LIMIT);
+        assert_eq!(m.fighters[1].x, ARENA_LIMIT);
     }
     #[test]
     fn high_low_overhead_defences_have_real_tradeoffs() {
@@ -1196,15 +1129,13 @@ mod tests {
         assert!(m.fighters[0].meter < 500);
     }
     #[test]
-    fn furniture_and_partitions_break_but_exterior_stays_intact() {
+    fn furniture_breaks_but_exterior_stays_intact() {
         let mut m = duel();
         m.remaining = 100_000;
-        m.walls[0].hp = 0;
-        m.walls[1].hp = 0;
         for id in 5..room::OBJECTS {
             let x = room::LAYOUT[id].x;
-            m.fighters[0].x = (x - 400).clamp(-6100, 6100);
-            m.fighters[1].x = 6400;
+            m.fighters[0].x = (x - 400).clamp(-ARENA_LIMIT + 300, ARENA_LIMIT - 300);
+            m.fighters[1].x = ARENA_LIMIT;
             m.fighters[1].invulnerable = 1000;
             for _ in 0..7 {
                 m.fighters[0].stamina = 1000;
@@ -1233,7 +1164,7 @@ mod tests {
         run(&mut m, [LIGHT, 0], 16);
         assert!(m.objects.iter().all(|o| o.broken_tick == 0));
         let before = m.objects[7].hp;
-        m.fighters[0].x = -1450;
+        m.fighters[0].x = room::LAYOUT[7].x;
         m.fighters[0].vx = 80;
         m.fighters[0].stun = 60;
         m.fighters[0].room_cooldown = 0;

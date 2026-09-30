@@ -109,23 +109,24 @@ Each fighter includes integer `vx`, `y`, `vy`, `recoil`, `recoil_v` and
 runs at 60 Hz in the shared simulation. Heavy strikes and grabs launch fighters;
 horizontal momentum causes wall impacts. Walking alone cannot damage a wall.
 
-`walls:[left,right]` contains `hp` (initially 75), `impacts`, `broken_tick`, and
-`impulse`. Intact walls constrain fighter centres to +/-3000 mm. A broken wall
-extends its side to 4200 mm. Breaking a wall deals additional damage. Wall state
-resets each round. Clients detect impacts from counters, including across sparse
-snapshots. Reconnecting clients reconstruct debris from the break tick.
+`walls:[left,right]` contains `hp` (110, permanent), `impacts`, `broken_tick`
+(always 0), and `impulse`. Exterior bounds are +/-11500 mm. Internal doorways
+are always open. Body impacts cause rebound and an impact event; the exterior
+cannot be destroyed. Wall counters reset each round. Clients detect impacts
+from counters, including across sparse snapshots.
 
 Skeletal recoil follows authoritative state. Joint-based KO ragdolls and bouncing
 fragments are cosmetic client simulations; neither can change combat outcomes.
 Each side loads its fighter's GLB and clip pack on demand; the same body may
 be shared by both independently posed fighters.
 `objects` contains 20 ordered `{hp,broken_tick,impulse}` entries. Stable IDs,
-positions and material kinds live in `combat/src/room.rs`. Attacks and thrown
-bodies damage furnishings; masonry resists ordinary hits, floor finish requires
-a powerful smash. Q/2048 smashes nearby interior in either direction. Every
-object resets at the next round. Fragments reconstruct deterministically from
-snapshot tick, object ID and break tick. Collision with fragments is cosmetic;
-the foundation remains walkable after floor tiles shatter.
+positions and material kinds live in `combat/src/room.rs`. IDs 0-4 are permanent
+shell; IDs 5-19 are furniture, glass, lamps and planters. Attacks and thrown
+bodies damage nearby furnishings with a body-contact cooldown. Q/2048 smashes
+nearby interior in either direction. Objects reset next round; fragments
+reconstruct deterministically from snapshot tick, object ID and break tick.
+Floors and doorways remain passable. Round starts cycle through five rooms;
+`room::ROUND_CENTERS` defines the shared client/server starting positions.
 
 Protocol v1/v2 clients are rejected; deploy server and browser assets together.
 

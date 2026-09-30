@@ -36,6 +36,8 @@ WORK = os.path.join(os.path.dirname(OUT), "room_bake")
 
 
 def static_group(o):
+    if o.get("bake_group"):
+        return o["bake_group"]
     n = o.name.lower()
     if n.startswith(("facade", "street")):
         return "outside"
@@ -143,15 +145,16 @@ def unwrap(o):
     bpy.context.view_layer.objects.active = o
     bpy.ops.object.mode_set(mode="EDIT")
     bpy.ops.mesh.select_all(action="SELECT")
-    bpy.ops.uv.smart_project(angle_limit=math.radians(60), island_margin=0.01, area_weight=0.0)
+    # A one-percent margin per island consumed almost the whole atlas on
+    # detailed furniture. Keep usable texels for the actual surfaces.
+    bpy.ops.uv.smart_project(angle_limit=math.radians(70), island_margin=0.002, area_weight=0.5)
     bpy.ops.object.mode_set(mode="OBJECT")
 
 
 # Texel budget per group: what the camera sees up close gets more.
-DETAIL = {"s_outside": 0.35, "s_ceiling": 0.4, "s_annex": 0.8,
-          "s_shell": 0.9, "o21": 0.6, "o12": 0.7}
-LIMIT = {"s_floor": 2048, "s_annex": 2048, "s_shell": 2048,
-         "o16": 2048, "o17": 2048}
+# City and hidden ceiling faces share small maps; hero surfaces retain detail.
+DETAIL = {"s_city_outside": 0.35}
+LIMIT = {"s_living_floor": 2048, "s_living_shell": 2048}
 
 
 def texture_size(o):
@@ -160,8 +163,8 @@ def texture_size(o):
     size = 128
     while size < side and size < LIMIT.get(o.name, 1024):
         size *= 2
-    if o.name.startswith("s_furniture"):
-        size = max(size, 2048)
+    if o.name in ("s_living_sofa", "s_living_furniture", "s_study_shelves"):
+        size = 2048
     return size
 
 
@@ -181,7 +184,7 @@ def bake(o, name):
     bpy.ops.object.bake(
         type="COMBINED",
         pass_filter={"DIRECT", "INDIRECT", "DIFFUSE", "GLOSSY", "TRANSMISSION", "EMIT"},
-        margin=16,
+        margin=8,
         margin_type="EXTEND",
         use_clear=True,
         target="IMAGE_TEXTURES",
@@ -283,10 +286,13 @@ def main():
     joined = {key: join(objs, key, key.startswith("o")) for key, objs in sorted(groups.items())}
     for key, o in joined.items():
         unwrap(o)
+    # Keep every original PBR material in place until ALL light maps have
+    # been baked. Replacing groups one by one darkens later indirect bounces
+    # and removes emissive lamps from the lighting calculation.
+    paths = {key: bake(o, key) for key, o in joined.items()}
     exported = []
     for key, o in joined.items():
-        path = bake(o, key)
-        finish(o, baked_material(key, path))
+        finish(o, baked_material(key, paths[key]))
         if key.startswith("o"):
             exported += split_pieces(o, key)
         else:
@@ -309,7 +315,7 @@ def main():
         export_format="GLB",
         export_image_format="JPEG",
         export_jpeg_quality=85,
-        export_normals=False,
+        export_normals=True,
         export_texcoords=True,
         export_materials="EXPORT",
         export_yup=True,

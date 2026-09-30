@@ -376,7 +376,7 @@ impl Renderer3D {
         let baked_shader = ctx
             .new_shader(
                 ShaderSource::Glsl {
-                    vertex: &vertex_shader(),
+                    vertex: &vertex_shader_for(true),
                     fragment: BAKED_FRAGMENT_SHADER,
                 },
                 ShaderMeta {
@@ -627,7 +627,24 @@ void main() {
         : pow(v_color, vec3(1.0 / 2.2));
     // material.x lifts shadowed faces of moved pieces towards room light.
     c = c * material.z + material.x * vec3(0.13, 0.11, 0.10) * (1.0 - c);
-    gl_FragColor = vec4(c, material.w);
+    vec3 n = normalize(v_normal);
+    vec3 view = normalize(camera_pos.xyz - v_world);
+    float alpha = material.w;
+    if (alpha < 0.99) {
+        // Glass reflection grows at grazing angles as the camera follows a fight.
+        float fresnel = pow(1.0 - abs(dot(n, view)), 5.0);
+        c = mix(c, vec3(0.78, 0.87, 1.0), fresnel * 0.45);
+        alpha += fresnel * 0.24;
+    } else if (abs(v_world.y - 0.0045) < 0.003 && n.y > 0.95 && material.x < 0.01) {
+        // The lacquered floor catches the room's pendant. Rugs are above this
+        // plane and remain matte. Baked occlusion attenuates the highlight.
+        float x = v_world.x;
+        float lampX = x < -8.0 ? -10.0 : x < -3.0 ? -5.5 : x < 3.0 ? 0.0 : x < 8.0 ? 5.4 : 9.0;
+        vec3 l = normalize(vec3(lampX, 2.8, -1.3) - v_world);
+        float shine = pow(max(dot(n, normalize(l + view)), 0.0), 48.0);
+        c += vec3(1.0, 0.81, 0.57) * shine * 0.18 * dot(c, vec3(0.333));
+    }
+    gl_FragColor = vec4(c, alpha);
 }
 "#;
 
@@ -676,6 +693,10 @@ fn color4(c: Color, w: f32) -> [f32; 4] {
 }
 
 fn vertex_shader() -> String {
+    vertex_shader_for(false)
+}
+
+fn vertex_shader_for(rigid: bool) -> String {
     // Размер массива костей должен быть литералом, поэтому шейдер собирается
     // строкой из той же константы, что и Rust-сторона.
     format!(
@@ -709,10 +730,7 @@ mat4 bone_matrix(int index) {{
 }}
 
 void main() {{
-    mat4 skin = bone_matrix(int(in_joints.x)) * in_weights.x
-              + bone_matrix(int(in_joints.y)) * in_weights.y
-              + bone_matrix(int(in_joints.z)) * in_weights.z
-              + bone_matrix(int(in_joints.w)) * in_weights.w;
+    {skin}
 
     vec4 skinned = skin * vec4(in_pos, 1.0);
     vec4 world = model * skinned;
@@ -728,7 +746,17 @@ void main() {{
     gl_Position = view_proj * world;
 }}
 "#,
-        bone_vec4 = MAX_BONES * 3
+        bone_vec4 = MAX_BONES * 3,
+        // Furniture pieces are rigid: four weighted bone fetches would waste
+        // most of the vertex work on zero weights across the whole apartment.
+        skin = if rigid {
+            "mat4 skin = bone_matrix(int(in_joints.x));"
+        } else {
+            "mat4 skin = bone_matrix(int(in_joints.x)) * in_weights.x
+              + bone_matrix(int(in_joints.y)) * in_weights.y
+              + bone_matrix(int(in_joints.z)) * in_weights.z
+              + bone_matrix(int(in_joints.w)) * in_weights.w;"
+        }
     )
 }
 

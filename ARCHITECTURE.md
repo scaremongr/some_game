@@ -111,20 +111,22 @@ Principles:
   max speed-up 2.5×); falls by hips height; jumps by feet contact; throw by
   first two-hand reach. Knockdown lasts `KNOCKDOWN = 72` ticks, a grip
   `HOLD = 32`.
-- Baked room: `tools/room/build_room.py` (Blender, Poly Haven CC0 assets,
-  owners per mesh, central apartment and two furnished side rooms) →
-  `tools/room/bake_room.py` (Cycles GPU bake per group, AgX, smart UV,
-  pieces split by loose parts) → `assets/room.glb`. The permanent exterior
-  shell is in fixed groups; only furnishings and interior dividers scatter.
-  Rendered unlit (`pipeline_baked`); fighters get a matching light rig.
-  Adding furniture: sources, licences and steps in §12.
+- Baked room: `tools/room/apartment.py` authors five open furnished rooms;
+  `build_room.py` supplies Blender import/material/preview helpers. CC0 Poly Haven
+  assets and seamless architectural surfaces, with 22 additional model types.
+  `bake_room.py` bakes Cycles bounced light, soft shadows and AgX tone into per-room
+  atlases. All PBR materials stay in place until every group has been baked.
+  Fixed shell/floors never scatter; owned furnishings split into rigid pieces.
+  `pipeline_baked` adds view-dependent glass Fresnel and restrained floor highlights;
+  fighters have matching warm/cool lighting and projected shadows.
+  Adding furniture: sources, licences and steps in section 12.
 
 ## 5. Combat core essentials (`combat/`)
 
-- Units: millimetres and ticks (60 Hz). Breakable dividers at ±3000 mm and
-  interior partitions at ±4500 mm; opening both allows fighters into the side
-  rooms up to fixed bounds at ±6400 mm.
-  The back exterior wall never breaks. Rounds 60 s, first to 2.
+- Units: millimetres and ticks (60 Hz). All five rooms are accessible through
+  open doorways from the start; fighter centres are bounded at +/-11500 mm.
+  The exterior never breaks. Rounds last 60 s, first to 2; successive rounds
+  start in living room, kitchen, study, garden, bedroom (then repeat).
 - Actions: 0 idle, 1 jab, 2 heavy (overhead), 3 dash, 4 throw, 5 hitstun,
   8 kick, 9 sweep, 10 uppercut, 11 cross, 12 roundhouse, 13 air kick,
   14 special, 15 knockdown, 19 room smash.
@@ -220,7 +222,7 @@ python tools/fetch-assets.py                 # models + packs (not in git)
 .\build-web.ps1                              # -> dist/ (both wasm + web + assets)
 .\build-web.ps1 -Serve                       # + local dev server on :8080 (guest identities)
 cargo test --offline --lib                   # engine/game: 60 tests
-cargo test --offline --manifest-path combat/Cargo.toml   # combat: 24 tests
+cargo test --offline --manifest-path combat/Cargo.toml   # combat: 25 tests
 npm test                                     # server: 15 tests (node:test)
 npm run test:browser; npm run test:combat; npm run test:physics   # Playwright, need dist/
 ```
@@ -350,7 +352,8 @@ Downloaded sources stay out of git (`assets-src/` is ignored); record in the
      vintage_cabinet_01, wooden_bookshelf_worn, potted_plant_02/04,
      modern_ceiling_lamp_01, picture frames, wall_clock, throw_pillows_01,
      wicker_basket_01, vases, mantel_clock_01, book sets, side tables, WoodenTable_02.
-   - Good unused candidates for a 90s sitcom flat (all have glTF, checked):
+   - Model catalogue for a detailed flat (all have glTF, checked; see the
+     current MODELS list and apartment.py for models already placed):
      seating `sofa_02, sofa_03, mid_century_lounge_chair, modern_arm_chair_01,
      GreenChair_01, Rockingchair_01, vintage_day_bed, painted_wooden_sofa,
      dining_chair_02, WoodenChair_01, bar_chair_round_01, metal_stool_01..03,
@@ -411,9 +414,9 @@ Downloaded sources stay out of git (`assets-src/` is ignored); record in the
 
 1. Download into `assets-src/room/models/<id>/` (one folder per model with a
    `.gltf` or `.glb`; `place()` imports the first one it finds).
-2. In `build()` (`tools/room/build_room.py`) add, e.g.:
+2. In `build_apartment()` (`tools/room/apartment.py`) add, e.g.:
    ```python
-   place("Television_01", 12, 3.2, -1.5, -20, ("h", 0.55), y=0.9, tris=3000)
+   asset("Television_01", 5.2, -2.0, ("h", 0.55), "study", owner=12, y=0.9, tris=3000)
    ```
    `place(asset, owner, x, z, rot_deg, fit, y=0, tint=None, recolor=None,
    nometal=False, glow=None, tris=5000)`: `fit` scales to a height/width/depth
@@ -422,30 +425,30 @@ Downloaded sources stay out of git (`assets-src/` is ignored); record in the
    `nometal` fixes models that bake too dark, `glow={"part": (color, strength)}`
    makes material parts emissive (lamps); `tris` is the decimation budget.
 3. **Coordinates** (game space, metres): x right, y up, z towards the camera.
-   Back wall at z = −1.8; the fighters' lane is z ≈ 0 — keep tall furniture at
-   z ≤ −0.6 and nothing at z > 0.6 (it would hide the fight; the camera looks
-   from z ≈ 5). Central room between dividers at x = ±3.34; side rooms behind
-   the partitions at x = ±4.65, fighters reach them up to x = ±6.4 once both
-   walls are broken; kitchen on the left, sofa area on the right.
-4. **Owner** (what breaks it): `-1` fixed, never breaks; otherwise the id of a
-   combat room object from `combat/src/room.rs` — the piece breaks when that
-   object does. Breakable ids and their places (x, z in mm): 5/6 windows
-   (∓2600, −1680), 7/8 tables (∓1450, −700), 9/10 stools (∓600/650, −650),
-   11/12 cabinets (∓3750, −950), 13/14 lamps (∓1600, −450), 15 planter
-   (0, −1250), 16/17 floor sections (∓2100, 0), 18/19 side partitions (∓4650),
-   20/21 the arena dividers (±3340). Ids 0–4 are the permanent back wall. Give a
-   new prop the id of the nearest object so it breaks with it; a new
-   independent breakable needs a new entry in `LAYOUT` (combat change: state
-   size, tests, `arena_props` owners, deploy of server and client together).
-5. **Budgets** (phones): the room is ~130–150k triangles and `room.glb`
-   ~9 MB. Keep a prop at 1.5–6k triangles (`tris=`), the room under ~200k and
-   the file under ~12 MB. Texture resolution comes from the bake: `DETAIL` and
+   Back wall z = -3.42. The fighting lane is z = 0: furniture stays behind it.
+   Rooms: garden [-12,-8], kitchen [-8,-3], living [-3,3], study [3,8],
+   bedroom [8,12]. Returns between rooms end at z = -1.5, leaving free passages.
+   The helper `asset(..., height=...)` can correct an imported table's height
+   while keeping its authored width. `tris` is a total model budget, divided
+   proportionally between submeshes.
+4. **Owner**: -1 = fixed; breakable IDs use `combat/src/room.rs` as the source
+   of truth for x/z. 5/6 windows, 7 coffee table, 8 side table, 9 kitchen chair,
+   10 study chair, 11 kitchen cabinet, 12 desk, 13/14 sconces, 15 planter,
+   16 chess table, 17 nightstand, 18 garden shelf, 19 bedroom cabinet.
+   IDs 0-4 are fixed shell; legacy wall state 20/21 remains permanent too.
+   Static `bake_group` values separate each room's shell, floor and furniture
+   to retain texture detail. A new independent breakable needs coordinated
+   updates to LAYOUT, renderer, tests and both client/server deployment.
+5. **Budgets** (phones): five rooms total about 143k triangles and 14 MB
+   with normals and baked lighting. Keep a prop at 1.5-6k triangles (`tris=`),
+   the room under ~200k and the file under ~16 MB. Rigid room geometry uses
+   one bone lookup per vertex instead of four weighted lookups. Texture resolution comes from the bake: `DETAIL` and
    `LIMIT` per group in `bake_room.py` (texels per metre, max side).
 6. Preview (seconds, Cycles on GPU):
-   `blender -b --factory-startup --python tools/room/build_room.py -- --preview out.png [--view left|right] [--samples 96]`
+   `blender -b --factory-startup --python tools/room/build_room.py -- --preview out.png [--view living|kitchen|garden|study|bedroom|overview] [--samples 96]`
    — look at the picture; fix scale, rotation, colour.
-7. Bake (~2–4 min on an RTX 4090; much slower on CPU, lower `--samples`):
-   `blender -b --factory-startup --python tools/room/bake_room.py -- --out assets/room.glb --samples 384`.
+7. Bake (~6-8 min at 128 samples on an RTX 4090; much slower on CPU):
+   `blender -b --factory-startup --python tools/room/bake_room.py -- --out assets/room.glb --samples 128 --density 180`.
 8. Check in game: `.\build-web.ps1`, then a pose sheet or
    `node scripts/fight-video.mjs <dir> moves` (breaks things) and look at the
    frames: nothing in the lane, pieces fly sensibly, no black faces. Run the

@@ -10,6 +10,8 @@ Files already present are skipped.
 import json
 import pathlib
 import urllib.request
+import argparse
+from concurrent.futures import ThreadPoolExecutor
 
 ROOT = pathlib.Path(__file__).resolve().parents[2] / "assets-src" / "room"
 MODELS = [
@@ -21,6 +23,13 @@ MODELS = [
     "wall_clock", "throw_pillows_01", "wicker_basket_01", "ceramic_vase_01", "brass_vase_01",
     "brass_vase_02", "mantel_clock_01", "decorative_book_set_01", "book_encyclopedia_set_01",
     "side_table_tall_01", "side_table_01", "WoodenTable_02",
+    "sofa_02", "mid_century_lounge_chair", "modern_coffee_table_01",
+    "desk_lamp_arm_01", "Television_01", "boombox", "vintage_microwave",
+    "vintage_electric_kettle", "electric_stove", "classic_laptop",
+    "vintage_day_bed", "ClassicNightstand_01", "modern_wooden_cabinet",
+    "chess_set", "wooden_bowl_01", "jug_01", "brass_candleholders",
+    "vintage_grandfather_clock_01", "anthurium_botany_01", "Chandelier_01",
+    "vintage_suitcase", "ceramic_vase_03",
 ]
 TEXTURES = [
     "painted_plaster_wall", "plastered_wall_02", "herringbone_parquet", "wood_floor",
@@ -49,11 +58,11 @@ def files(asset):
         return json.load(r)
 
 
-for asset in MODELS:
+def model(asset):
     formats = files(asset)
     if "gltf" not in formats:
         print("skip (no glTF)", asset)
-        continue
+        return
     gltf = formats["gltf"]["1k"]["gltf"]
     folder = ROOT / "models" / asset
     get(gltf["url"], folder / pathlib.Path(gltf["url"]).name)
@@ -61,7 +70,7 @@ for asset in MODELS:
         get(item["url"], folder / rel)
     print("model", asset)
 
-for asset in TEXTURES:
+def texture(asset):
     data = files(asset)
     folder = ROOT / "textures" / asset
     for kind in ("Diffuse", "nor_gl", "Rough"):
@@ -70,3 +79,14 @@ for asset in TEXTURES:
         if entry:
             get(entry["url"], folder / pathlib.Path(entry["url"]).name)
     print("texture", asset)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--models", nargs="*", help="Download only these model IDs")
+    options = parser.parse_args()
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        list(pool.map(model, MODELS if options.models is None else options.models))
+    if options.models is None:
+        for asset in TEXTURES:
+            texture(asset)
