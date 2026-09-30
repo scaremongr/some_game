@@ -1,0 +1,5 @@
+# Separate hostname for the arena; no changes to the existing application's routes.
+arena.example.com {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:8080
+}

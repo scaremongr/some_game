@@ -1,0 +1,46 @@
+# Fight state -> converted Mixamo clip (assets-src/fight/glb). Packed by:
+#   cargo run --release --bin fightpack -- assets-src/fight/glb assets-src/fight/clips.txt assets/fight.pack
+# Keys are fixed in src/game/fighter_model.rs (take_for); missing keys fall back to authored poses.
+idle       = 001 Boxing Idle.glb
+walk_fwd   = 008 Short Boxing Step Forward.glb
+walk_back  = 011 Short Boxing Step Backward.glb
+jab_s      = 019 Short Head Jab.glb
+jab_m      = 020 Med Head Jab.glb
+jab_l      = 021 Long Head Jab.glb
+cross      = 025 Cross Punch.glb
+heavy      = 057 Mma Spinning Back Kick.glb
+uppercut   = 040 Boxing Back Hand Uppercut.glb
+kick       = 061 Male Front Snap Kick With The Lead Foot.glb
+sweep      = 068 360 Leg Sweep Kick.glb
+roundhouse = 053 Mma High Kick.glb
+special    = 051 Street Fighter Hadouken.glb
+dash_fwd   = 009 Medium Boxing Step Forward.glb
+dash_back  = 012 Medium Boxing Step Backward.glb
+hit_head   = 093 Receiving A Medium Hit To The Head From A Straight Punch.glb
+hit_gut    = 099 Receiving A Hit In The Stomach.glb
+stagger    = 107 Small Hit Reaction From The Front.glb
+dizzy      = 110 Rocking Back And Forth As If Dizzy.glb
+hit_wall   = 096 Receiving A Big Hit To The Head From A Straight Punch.glb
+swept      = 115 Getting Feet Swept Out From Underneath And Falling.glb
+getup      = 121 Getting Up From Being Knocked Down On The Ground.glb
+ko         = 111 Knocked Out Falling To Back.glb
+victory    = 132 Victory From A Boxing Win.glb
+defeat     = 133 Defeat From A Boxing Loss.glb
+# Block stance, jumps, air attack, throw and airborne reactions.
+guard = 000 Bouncing Fight Idle With Guard Up.glb
+jump = 125 Jumping In Place.glb
+jump_fwd = 130 Big Front Flip.glb
+jump_back = 129 Standing Backflip.glb
+air_kick = 150 Flying Sidekick From A Run.glb @ 0.1-0.8
+throw = 080 Grabbing And Slamming Someone To The Ground.glb @ 0.9-3.7
+air_hit = 117 Dying Flying Backward.glb @ 0-1.0
+air_down = 117 Dying Flying Backward.glb @ 0.7-1.5
+thrown = 079 Thrown Over The Shoulder With A Leg Hook By An Aggressor.glb @ 2.0-3.6
+thrown_down = 079 Thrown Over The Shoulder With A Leg Hook By An Aggressor.glb @ 3.2-4.3
+# In the thrower's grip: pulled in, lifted, flipped and down on the floor.
+held = 079 Thrown Over The Shoulder With A Leg Hook By An Aggressor.glb @ 2.0-3.5
+# Crouch (legs; the upper body comes from idle/guard), crouch walking, room smash.
+crouch = 138 Crouch Idle.glb
+crouch_walk_fwd = 140 Walking Forward While Crouched.glb
+crouch_walk_back = 141 Walking Backwards While Crouched.glb
+smash = 146 Hard Floor Stomp.glb

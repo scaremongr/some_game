@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Проверка камеры</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0;
+    padding: 12px;
+    background: #0b0d14;
+    color: #c9cfe8;
+    font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  h1 { font-size: 15px; margin: 0 0 10px; color: #fff; }
+  button {
+    width: 100%;
+    padding: 14px;
+    font: inherit;
+    font-size: 15px;
+    color: #fff;
+    background: #2e3350;
+    border: 1px solid #8aa0ff;
+    border-radius: 8px;
+  }
+  button:active { background: #3d4470; }
+  video {
+    width: 100%;
+    margin-top: 12px;
+    border-radius: 8px;
+    background: #000;
+    /* Зеркалим: повторять движения за неотзеркаленным изображением
+       невозможно — мозг путает лево и право. */
+    transform: scaleX(-1);
+  }
+  #log {
+    margin-top: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 12px;
+    color: #8a91b4;
+  }
+  .ok { color: #7ee081; }
+  .fail { color: #ff8a8a; }
+</style>
+</head>
+<body>
+<h1>Проверка доступа к камере</h1>
+<button id="go">Включить камеру</button>
+<video id="v" playsinline autoplay muted></video>
+<div id="log"></div>
+
+<script>
+(function () {
+  var tg = window.Telegram && window.Telegram.WebApp;
+  if (tg) { tg.ready(); tg.expand(); }
+
+  var log = document.getElementById('log');
+  function say(text, cls) {
+    var line = document.createElement('div');
+    if (cls) line.className = cls;
+    line.textContent = text;
+    log.appendChild(line);
+  }
+
+  say('secure context: ' + window.isSecureContext);
+  say('mediaDevices: ' + !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
+  if (tg) {
+    say('telegram: ' + tg.platform + ' v' + tg.version);
+  } else {
+    say('telegram: нет (открыто в обычном браузере)');
+  }
+  say('ua: ' + navigator.userAgent);
+
+  document.getElementById('go').addEventListener('click', function () {
+    if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
+      say('getUserMedia недоступен в этом WebView', 'fail');
+      return;
+    }
+    say('запрашиваю разрешение...');
+    navigator.mediaDevices
+      .getUserMedia({ video: { facingMode: 'user' }, audio: false })
+      .then(function (stream) {
+        var v = document.getElementById('v');
+        v.srcObject = stream;
+        var track = stream.getVideoTracks()[0];
+        var s = track.getSettings ? track.getSettings() : {};
+        say('КАМЕРА РАБОТАЕТ', 'ok');
+        say('поток: ' + (s.width || '?') + 'x' + (s.height || '?') +
+            ' @ ' + (s.frameRate ? Math.round(s.frameRate) : '?') + ' fps');
+        say('устройство: ' + (track.label || 'без имени'));
+      })
+      .catch(function (e) {
+        say('ОТКАЗ: ' + e.name, 'fail');
+        say(String(e.message || e));
+      });
+  });
+})();
+</script>
+</body>
+</html>

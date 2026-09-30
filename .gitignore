@@ -1,0 +1,39 @@
+# Build output and caches
+/target
+/combat/target
+/dist
+/node_modules
+/.npm-cache
+/.browsers
+/artifacts
+/pulse-server.zip
+__pycache__/
+*.pyc
+
+# Secrets (bot tokens, env files)
+.env
+secrets/
+
+# Runtime data of a local production-mode server
+/data/
+
+# Mixamo-derived files: fine inside the game, not as standalone files in a
+# public repository. Restore with: python tools/fetch-assets.py
+/assets/character.glb
+/assets/fight.pack
+/assets/fighters/*.glb
+/assets/fighters/*.pack
+
+# Heavy, regenerable sources (Mixamo downloads, Poly Haven assets). The clip
+# list stays: it is the recipe for fight packs.
+/assets-src/*
+!/assets-src/fight/
+/assets-src/fight/*
+!/assets-src/fight/clips.txt
+
+# Legacy dance-game assets and bake intermediates (room.glb embeds them)
+/assets/character_old.glb
+/assets/character_not_rigged.glb
+/assets/moves/
+/assets/music/
+/assets/room_bake/

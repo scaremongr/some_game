@@ -1,0 +1,9 @@
+[
+  {"id": "medea", "name": "Медея", "model": "assets/character.glb", "pack": "assets/fight.pack", "portrait": "assets/fighters/medea.jpg"},
+  {"id": "kachujin", "name": "Качуджин", "model": "assets/fighters/kachujin.glb", "pack": "assets/fighters/kachujin.pack", "portrait": "assets/fighters/kachujin.jpg"},
+  {"id": "ninja", "name": "Ниндзя", "model": "assets/fighters/ninja.glb", "pack": "assets/fighters/ninja.pack", "portrait": "assets/fighters/ninja.jpg"},
+  {"id": "remy", "name": "Реми", "model": "assets/fighters/remy.glb", "pack": "assets/fighters/remy.pack", "portrait": "assets/fighters/remy.jpg"},
+  {"id": "vanguard", "name": "Авангард", "model": "assets/fighters/vanguard.glb", "pack": "assets/fighters/vanguard.pack", "portrait": "assets/fighters/vanguard.jpg"},
+  {"id": "ely", "name": "Эли", "model": "assets/fighters/ely.glb", "pack": "assets/fighters/ely.pack", "portrait": "assets/fighters/ely.jpg"},
+  {"id": "eve", "name": "Ева", "model": "assets/fighters/eve.glb", "pack": "assets/fighters/eve.pack", "portrait": "assets/fighters/eve.jpg"}
+]

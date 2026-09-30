@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Прогон pose.js</title>
+<style>
+  body { margin: 0; padding: 12px; background: #0b0d14; color: #c9cfe8;
+         font: 13px/1.5 ui-monospace, Consolas, monospace; }
+  #log { white-space: pre-wrap; word-break: break-word; }
+  .ok { color: #7ee081; } .fail { color: #ff8a8a; }
+  canvas { display: none; }
+</style>
+</head>
+<body>
+<!-- Прогон настоящего web/pose.js без движка и без живой камеры.
+     Загрузчика miniquad здесь нет, поэтому его две точки опоры —
+     miniquad_add_plugin и wasm_memory — подменены заглушками; всё
+     остальное работает ровно так же, как в игре.
+
+     Запуск: см. run-pose-harness.ps1. В браузере вручную тоже открывается,
+     тогда возьмёт настоящую камеру.
+
+     В dist не попадает: build-web.ps1 копирует файлы поимённо. -->
+<canvas id="glcanvas"></canvas>
+<div id="log"></div>
+
+<script>
+  // Заглушки загрузчика miniquad.
+  var wasm_memory = { buffer: new ArrayBuffer(65536) };
+  var registered = [];
+  function miniquad_add_plugin(plugin) { registered.push(plugin); }
+</script>
+<script src="pose.js"></script>
+<script>
+(function () {
+  var STATUS = ['IDLE', 'CAMERA', 'MODEL', 'RUNNING', 'DENIED', 'UNSUPPORTED', 'FAILED'];
+  var log = document.getElementById('log');
+  var reported = {};
+
+  function say(text, cls) {
+    var line = document.createElement('div');
+    if (cls) line.className = cls;
+    line.textContent = text;
+    log.appendChild(line);
+    console.log(text);
+
+    // Результат уезжает GET-запросом: его видно в логе локального сервера,
+    // и это единственный канал из headless-браузера наружу, который не
+    // требует отладочного протокола.
+    if (!reported[text]) {
+      reported[text] = true;
+      var image = new Image();
+      image.src = '/HARNESS/' + encodeURIComponent(text) + '?t=' + Date.now();
+    }
+  }
+
+  if (!registered.length) {
+    say('FAIL: pose.js не зарегистрировал плагин', 'fail');
+    return;
+  }
+
+  var env = {};
+  registered[0].register_plugin({ env: env });
+
+  var missing = ['pose_start', 'pose_stop', 'pose_status', 'pose_aspect', 'pose_read', 'pose_error']
+    .filter(function (name) { return typeof env[name] !== 'function'; });
+  if (missing.length) {
+    say('FAIL: не зарегистрированы ' + missing.join(', '), 'fail');
+    return;
+  }
+  say('плагин зарегистрирован, импорты на месте');
+
+  function readError() {
+    var count = env.pose_error(0, 512);
+    if (count <= 0) return '';
+    return String.fromCharCode.apply(null, new Uint8Array(wasm_memory.buffer, 0, count));
+  }
+
+  var last = -1;
+  var started = Date.now();
+  var LIMIT_MS = 180000;
+
+  env.pose_start();
+
+  var timer = setInterval(function () {
+    var status = env.pose_status();
+    var seconds = Math.round((Date.now() - started) / 1000);
+
+    if (status !== last) {
+      last = status;
+      say('статус: ' + (STATUS[status] || status) + '  (' + seconds + ' c)');
+    }
+
+    if (status === 3) {
+      // pose_read пишет 13 точек по 4 float начиная с нуля.
+      var count = env.pose_read(0);
+      if (count > 0) {
+        var points = new Float32Array(wasm_memory.buffer, 0, count * 4);
+        say('точек: ' + count + '  аспект: ' + env.pose_aspect().toFixed(3));
+        say('первая точка: ' + points[0].toFixed(3) + ', ' + points[1].toFixed(3) +
+            ', глубина ' + points[2].toFixed(3) + ', видимость ' + points[3].toFixed(3));
+        clearInterval(timer);
+        say('HARNESS OK: распознавание работает', 'ok');
+        return;
+      }
+      // На синтетическом видео человека нет, и точек не будет никогда.
+      // Но соотношение сторон выставляется в detect() на каждом кадре, до
+      // самого распознавания: если оно уехало от единицы, значит кадры идут
+      // и detectForVideo вызывается, а не падает молча.
+      if (seconds > 20) {
+        clearInterval(timer);
+        var aspect = env.pose_aspect();
+        if (Math.abs(aspect - 1.0) < 1e-6) {
+          say('HARNESS FAIL: кадры не доходят до detect(), аспект остался ' + aspect, 'fail');
+        } else {
+          say('HARNESS OK: модель загрузилась, кадры идут (аспект ' + aspect.toFixed(3) +
+              '), поз в кадре нет - для фейковой камеры это ожидаемо', 'ok');
+        }
+      }
+      return;
+    }
+
+    if (status === 4 || status === 5 || status === 6) {
+      clearInterval(timer);
+      say('HARNESS FAIL: ' + STATUS[status] + ' :: ' + (readError() || 'без подробностей'), 'fail');
+      return;
+    }
+
+    if (Date.now() - started > LIMIT_MS) {
+      clearInterval(timer);
+      say('HARNESS FAIL: истекло время на статусе ' + STATUS[status] +
+          ' :: ' + (readError() || 'без подробностей'), 'fail');
+    }
+  }, 500);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+[package]
+name = "some_game"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+arena-combat = { path = "combat" }
+miniquad = "0.4"
+# Разбор JSON-части glTF. Без зависимостей и крошечный — важно для wasm.
+nanoserde = "0.2"
+# Декодеры картинок из glTF. Оба на чистом Rust, поэтому собираются под wasm;
+# у jpeg-decoder отключаем rayon, которого в вебе нет.
+png = "0.17"
+jpeg-decoder = { version = "0.3", default-features = false }
+# Звук: WASAPI на Windows, WebAudio в браузере — обе наши цели одной API.
+quad-snd = "0.2"
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

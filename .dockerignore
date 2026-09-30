@@ -1,0 +1,17 @@
+target
+combat/target
+node_modules
+.npm-cache
+.browsers
+artifacts
+dist
+assets/*
+!assets/character.glb
+.env
+.git
+!assets/fight.pack
+assets-src
+!assets/fighters
+!assets/room.glb
+secrets
+!assets/bot

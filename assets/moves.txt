@@ -1,0 +1,22 @@
+# Библиотека движений: по одному файлу .glb в строке.
+# Пути считаются от папки assets. Строки с # игнорируются.
+#
+# Кости сопоставляются ПО ИМЕНИ, поэтому файл должен быть с того же рига,
+# что и character.glb. Для Mixamo это выполняется само собой: у всех его
+# персонажей и анимаций риг одинаковый.
+#
+# Файлу не нужны ни меш, ни текстуры — достаточно скелета и анимации.
+# В Mixamo это опция "Without Skin" при скачивании.
+#
+# Пример:
+# moves/hip-hop.glb
+# moves/twist.glb
+moves/Flai.glb
+moves/hiphotdance.glb
+moves/House Dancing.glb
+moves/Robot Hip Hop Dance.glb
+moves/Rumba Dancing.glb
+moves/Silly Dancing.glb
+moves/Snake Hip Hop Dance.glb
+moves/Swing Dancing.glb
+moves/Thriller Part 3.glb
