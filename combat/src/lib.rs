@@ -20,6 +20,18 @@ pub const INPUT_MASK: u32 = 4095;
 pub const EDGE_MASK: u32 = LIGHT | HEAVY | DASH | THROW | KICK | JUMP | SPECIAL | SMASH;
 /// Ticks on the floor after a knockdown, including the visible wake-up.
 pub const KNOCKDOWN: u32 = 72;
+const INNER_WALL: i32 = 3000;
+const PARTITION_WALL: i32 = 4500;
+const OUTER_WALL: i32 = 6400;
+fn room_bound(wall: &Wall, partition: &room::ObjectState) -> i32 {
+    if wall.hp > 0 {
+        INNER_WALL
+    } else if partition.hp > 0 {
+        PARTITION_WALL
+    } else {
+        OUTER_WALL
+    }
+}
 // action: 0 idle, 1 jab, 2 heavy, 3 dash, 4 throw, 5 stun
 #[derive(Clone, Debug, SerJson, DeJson)]
 pub struct Fighter {
@@ -31,6 +43,8 @@ pub struct Fighter {
     pub recoil: i32,
     pub recoil_v: i32,
     pub wall_cooldown: u32,
+    #[nserde(default)]
+    pub room_cooldown: u32,
     pub hp: i32,
     pub stamina: i32,
     pub action: u32,
@@ -75,6 +89,7 @@ impl Fighter {
             recoil: 0,
             recoil_v: 0,
             wall_cooldown: 0,
+            room_cooldown: 0,
             hp: 100,
             stamina: 1000,
             action: 0,
@@ -114,7 +129,7 @@ pub struct Wall {
 impl Default for Wall {
     fn default() -> Self {
         Self {
-            hp: 75,
+            hp: 110,
             impacts: 0,
             broken_tick: 0,
             impulse: 0,
@@ -231,8 +246,8 @@ impl Match {
     /// or the timer lands instead of hanging in the air. True while moving.
     fn settle(&mut self) -> bool {
         let bounds = [
-            if self.walls[0].hp > 0 { -3000 } else { -4200 },
-            if self.walls[1].hp > 0 { 3000 } else { 4200 },
+            -room_bound(&self.walls[0], &self.objects[18]),
+            room_bound(&self.walls[1], &self.objects[19]),
         ];
         let mut moving = false;
         for f in &mut self.fighters {
@@ -447,8 +462,8 @@ impl Match {
                 f.stamina = (f.stamina + if f.guard { 3 } else { 6 }).min(1000);
             }
             f.x = f.x.clamp(
-                if self.walls[0].hp > 0 { -3000 } else { -4200 },
-                if self.walls[1].hp > 0 { 3000 } else { 4200 },
+                -room_bound(&self.walls[0], &self.objects[18]),
+                room_bound(&self.walls[1], &self.objects[19]),
             );
         }
         if let Some(side) = breaker {
@@ -466,8 +481,8 @@ impl Match {
         // Fighters cannot cross; facing and control direction stay predictable on phones.
         if self.fighters[1].x - self.fighters[0].x < 600 {
             let mid = ((self.fighters[0].x + self.fighters[1].x) / 2).clamp(
-                if self.walls[0].hp > 0 { -2700 } else { -3900 },
-                if self.walls[1].hp > 0 { 2700 } else { 3900 },
+                -room_bound(&self.walls[0], &self.objects[18]) + 300,
+                room_bound(&self.walls[1], &self.objects[19]) - 300,
             );
             self.fighters[0].x = mid - 300;
             self.fighters[1].x = mid + 300;
@@ -489,14 +504,18 @@ impl Match {
                         a.x + a.facing * m.reach / 2
                     },
                     if a.action == 19 {
-                        2100
+                        950
                     } else {
-                        m.reach / 2 + 400
+                        m.reach / 3 + 220
                     },
                     if a.action == 14 || a.action == 19 {
-                        65
+                        if a.action == 19 {
+                            48
+                        } else {
+                            32
+                        }
                     } else {
-                        m.damage * 2
+                        m.damage
                     },
                     a.facing * 100,
                 );
@@ -618,8 +637,8 @@ impl Match {
         for side in 0..2 {
             if self.fighters[side].held > 0 {
                 let bounds = [
-                    if self.walls[0].hp > 0 { -3000 } else { -4200 },
-                    if self.walls[1].hp > 0 { 3000 } else { 4200 },
+                    -room_bound(&self.walls[0], &self.objects[18]),
+                    room_bound(&self.walls[1], &self.objects[19]),
                 ];
                 let (x, facing) = (self.fighters[1 - side].x, self.fighters[1 - side].facing);
                 let v = &mut self.fighters[side];
@@ -650,17 +669,19 @@ impl Match {
         for (o, def) in self.objects.iter_mut().zip(room::LAYOUT) {
             if o.hp > 0 && (def.x - x).abs() <= radius {
                 let material_damage = match def.kind {
-                    0 | 8 => damage / 3,
+                    // The exterior shell remains intact throughout the fight.
+                    0 => 0,
+                    8 => damage / 4,
                     7 => {
-                        if damage >= 60 {
-                            damage
+                        if damage >= 45 {
+                            damage / 2
                         } else {
                             0
                         }
                     }
                     5 => {
                         if damage >= 30 {
-                            damage / 2
+                            damage / 3
                         } else {
                             0
                         }
@@ -678,13 +699,15 @@ impl Match {
     fn physics(&mut self) {
         for i in 0..2 {
             let f = &self.fighters[i];
-            if f.stun > 0 && f.vx.abs() > 55 {
-                self.damage_room(f.x, 550, 12, f.vx);
+            if f.stun > 0 && f.vx.abs() > 55 && f.room_cooldown == 0 {
+                self.damage_room(f.x, 380, 8, f.vx);
+                self.fighters[i].room_cooldown = 30;
             }
         }
         for side in 0..2 {
             let f = &mut self.fighters[side];
             f.wall_cooldown = f.wall_cooldown.saturating_sub(1);
+            f.room_cooldown = f.room_cooldown.saturating_sub(1);
             f.recoil_v = (f.recoil_v - f.recoil * 7 / 100) * 82 / 100;
             f.recoil = (f.recoil + f.recoil_v).clamp(-120, 550);
             if f.recoil.abs() < 20 && f.recoil_v.abs() < 3 {
@@ -719,8 +742,8 @@ impl Match {
                 let sign = if wall_side == 0 { -1 } else { 1 };
                 let wall = &mut self.walls[wall_side];
                 let outward = f.vx * sign;
-                if wall.hp > 0 && f.x * sign >= 3000 {
-                    f.x = sign * 3000;
+                if wall.hp > 0 && f.x * sign >= INNER_WALL {
+                    f.x = sign * INNER_WALL;
                     if outward >= 35 && f.wall_cooldown == 0 {
                         wall.hp = (wall.hp - outward / 2).max(0);
                         wall.impacts += 1;
@@ -741,9 +764,36 @@ impl Match {
                     }
                 }
             }
+            // The partition between the central arena and an annex must be
+            // smashed before a fighter can enter the rest of that room.
+            for side in 0..2 {
+                if self.walls[side].hp > 0 {
+                    continue;
+                }
+                let sign = if side == 0 { -1 } else { 1 };
+                let partition = &mut self.objects[18 + side];
+                if partition.hp > 0 && f.x * sign >= PARTITION_WALL {
+                    f.x = sign * PARTITION_WALL;
+                    let outward = f.vx * sign;
+                    if outward >= 35 && f.wall_cooldown == 0 {
+                        partition.hp = (partition.hp - outward / 3).max(0);
+                        partition.impulse = outward;
+                        f.wall_cooldown = 30;
+                        f.stun = f.stun.max(20);
+                        if partition.hp == 0 {
+                            partition.broken_tick = self.tick;
+                            f.vx = sign * outward * 2 / 3;
+                        } else {
+                            f.vx = -sign * outward / 3;
+                        }
+                    } else {
+                        f.vx = 0;
+                    }
+                }
+            }
             f.x = f.x.clamp(
-                if self.walls[0].hp > 0 { -3000 } else { -4200 },
-                if self.walls[1].hp > 0 { 3000 } else { 4200 },
+                -room_bound(&self.walls[0], &self.objects[18]),
+                room_bound(&self.walls[1], &self.objects[19]),
             );
         }
     }
@@ -871,7 +921,7 @@ mod tests {
         m.fighters[0].x = 1900;
         m.fighters[1].x = 2850;
         run(&mut m, [HEAVY, 0], 45);
-        assert!(m.walls[1].hp < 75);
+        assert!(m.walls[1].hp < 110);
         assert_eq!(m.walls[1].impacts, 1);
         assert!(m.fighters[1].hp < 100);
         run(&mut m, [0, 0], 100);
@@ -883,7 +933,7 @@ mod tests {
     fn broken_wall_opens_space_and_rebuilds_next_round() {
         let mut m = duel();
         m.fighters[1].x = 2990;
-        m.fighters[1].vx = 180;
+        m.fighters[1].vx = 270;
         m.fighters[1].y = 10;
         m.step([0, 0]);
         assert_eq!(m.walls[1].hp, 0);
@@ -891,18 +941,27 @@ mod tests {
         assert!(m.walls[1].broken_tick > 0);
         run(&mut m, [0, RIGHT], 70);
         assert!(m.fighters[1].x > 3000);
+        m.fighters[1].x = 4450;
+        m.fighters[1].vx = 20;
+        m.step([0, RIGHT]);
+        assert!(m.fighters[1].x <= PARTITION_WALL);
+        m.objects[19].hp = 0;
+        m.fighters[1].x = 6350;
+        m.fighters[1].vx = 100;
+        m.step([0, RIGHT]);
+        assert_eq!(m.fighters[1].x, OUTER_WALL);
         m.remaining = 1;
         m.step([0, 0]);
         run(&mut m, [0, 0], 150);
-        assert_eq!(m.walls[1].hp, 75);
+        assert_eq!(m.walls[1].hp, 110);
         assert_eq!(m.walls[1].broken_tick, 0);
     }
     #[test]
     fn running_into_wall_cannot_break_it_without_hit_impulse() {
         let mut m = duel();
         run(&mut m, [LEFT, RIGHT], 600);
-        assert_eq!(m.walls[0].hp, 75);
-        assert_eq!(m.walls[1].hp, 75);
+        assert_eq!(m.walls[0].hp, 110);
+        assert_eq!(m.walls[1].hp, 110);
     }
     #[test]
     fn exhausted_guard_breaks_and_recovers() {
@@ -1137,15 +1196,17 @@ mod tests {
         assert!(m.fighters[0].meter < 500);
     }
     #[test]
-    fn every_room_object_can_break_from_attacks_and_resets() {
+    fn furniture_and_partitions_break_but_exterior_stays_intact() {
         let mut m = duel();
-        for id in 0..room::OBJECTS {
+        m.remaining = 100_000;
+        m.walls[0].hp = 0;
+        m.walls[1].hp = 0;
+        for id in 5..room::OBJECTS {
             let x = room::LAYOUT[id].x;
-            m.fighters[0].x = (x - 700).clamp(-3000, 2700);
-            m.fighters[1].x = 4200;
+            m.fighters[0].x = (x - 400).clamp(-6100, 6100);
+            m.fighters[1].x = 6400;
             m.fighters[1].invulnerable = 1000;
-            m.walls[1].hp = 0;
-            for _ in 0..3 {
+            for _ in 0..7 {
                 m.fighters[0].stamina = 1000;
                 run(&mut m, [SMASH, 0], 55);
                 m.step([0, 0]);
@@ -1153,6 +1214,10 @@ mod tests {
             assert_eq!(m.objects[id].hp, 0, "object {id}");
             assert!(m.objects[id].broken_tick > 0);
         }
+        assert!(m.objects[..5]
+            .iter()
+            .zip(room::LAYOUT)
+            .all(|(o, d)| o.hp == d.hp));
         m.remaining = 1;
         m.step([0, 0]);
         run(&mut m, [0, 0], 150);
@@ -1161,6 +1226,24 @@ mod tests {
             .iter()
             .zip(room::LAYOUT)
             .all(|(o, d)| o.hp == d.hp && o.broken_tick == 0));
+    }
+    #[test]
+    fn a_jab_does_not_destroy_the_room_and_body_contact_is_cooldown_limited() {
+        let mut m = duel();
+        run(&mut m, [LIGHT, 0], 16);
+        assert!(m.objects.iter().all(|o| o.broken_tick == 0));
+        let before = m.objects[7].hp;
+        m.fighters[0].x = -1450;
+        m.fighters[0].vx = 80;
+        m.fighters[0].stun = 60;
+        m.fighters[0].room_cooldown = 0;
+        m.physics();
+        let once = m.objects[7].hp;
+        for _ in 0..10 {
+            m.physics();
+        }
+        assert!(once < before);
+        assert_eq!(m.objects[7].hp, once);
     }
     #[test]
     fn air_combo_limit_forces_landing_and_safe_wakeup() {

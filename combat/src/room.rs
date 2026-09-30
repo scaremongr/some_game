@@ -1,7 +1,8 @@
 //! Shared room layout and durable objects. IDs are stable across snapshots.
+//! IDs 0..4 describe the permanent exterior wall and are never damaged.
 use nanoserde::{DeJson, SerJson};
 pub const OBJECTS: usize = 20;
-// kind: 0 back panel, 1 glass, 2 table, 3 stool, 4 cabinet,
+// kind: 0 fixed back panel, 1 glass, 2 table, 3 stool, 4 cabinet,
 // 5 light, 6 planter, 7 floor tile, 8 side partition, 9 overhead beam.
 #[derive(Clone, Copy)]
 pub struct ObjectDef {

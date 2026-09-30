@@ -297,7 +297,7 @@ impl ArenaProps {
     }
     fn add(&mut self, owner: usize, position: Vec3, size: Vec3, color: Vec3) {
         self.parts.push(Part {
-            owner,
+            owner: if owner < 5 { 22 } else { owner },
             position,
             size,
             color,
@@ -321,7 +321,7 @@ impl ArenaProps {
                 _ => (false, ""),
             };
             let owner = rest.get(0..2).and_then(|s| s.parse::<usize>().ok()).filter(|&o| o < 22);
-            let Some(owner) = owner else {
+            let Some(owner) = owner.filter(|&o| o >= 5) else {
                 fixed.push((node.mesh, node.position));
                 continue;
             };
@@ -642,7 +642,7 @@ mod tests {
         resumed.update(&state, [-20.0, 20.0]);
         assert_eq!(live.parts.len(), resumed.parts.len());
         for (a, b) in live.parts.iter().zip(&resumed.parts) {
-            if a.owner < 20 {
+            if (5..20).contains(&a.owner) {
                 assert_eq!(
                     a.fragment.as_ref().unwrap().matrix().0,
                     b.fragment.as_ref().unwrap().matrix().0
@@ -656,7 +656,7 @@ mod tests {
         let mut room = ArenaProps::new();
         let pieces = room.set_room(&bytes).unwrap();
         assert!(pieces > 200, "{pieces} pieces");
-        for id in 0..22 {
+        for id in 5..22 {
             assert!(room.parts.iter().any(|p| p.owner == id && p.piece), "owner {id}");
         }
         // Break everything: pieces fall, stay finite and out of the lane.
@@ -686,7 +686,7 @@ mod tests {
     #[test]
     fn every_visible_part_has_a_durable_owner_and_reset_restores_it() {
         let mut room = ArenaProps::new();
-        for id in 0..22 {
+        for id in 5..22 {
             assert!(room.parts.iter().any(|p| p.owner == id));
         }
         assert!(room.parts.len() < 400);

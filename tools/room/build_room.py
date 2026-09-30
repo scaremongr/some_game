@@ -492,25 +492,25 @@ def build():
     # The rug is cut along the floorboards so it cracks with them.
     rug_tiles(rug_material(), (-1.15, 3.05), (-1.5, 1.1))
 
-    # Back wall (z = -1.8): five panels of plaster bricks, kitchen brick on
+    # Back wall (z = -1.8): permanent exterior shell, kitchen brick on
     # the left, windows at x = +-2.6, the apartment door in the middle.
     window_holes = [(-3.15, -2.05, 1.05, 2.45), (1.95, 3.25, 0.75, 2.75)]
     door_hole = (-0.5, 0.5, 0.0, 2.15)
     for i, cx in enumerate((-3.6, -1.8, 0.0, 1.8, 3.6)):
         mat = brick if cx < -2.7 else lavender
         holes = [h for h in window_holes + [door_hole] if h[0] < cx + 0.9 and h[1] > cx - 0.9]
-        grid_wall("backwall", i, cx - 0.9, cx + 0.9, 0.0, 3.3, -1.8, 0.2, mat, 3, 4, holes)
-    # Door leaf and frame belong to the middle panel.
-    box("door", 2, (0.0, 1.06, -1.83), (0.96, 2.1, 0.05), door)
+        grid_wall("backwall", -1, cx - 0.9, cx + 0.9, 0.0, 3.3, -1.8, 0.2, mat, 3, 4, holes)
+    # The entrance and exterior trim stay attached to the shell.
+    box("door", -1, (0.0, 1.06, -1.83), (0.96, 2.1, 0.05), door)
     for dx in (-0.53, 0.53):
-        box("doorframe", 2, (dx, 1.1, -1.7), (0.08, 2.2, 0.06), trim)
-    box("doorframe", 2, (0, 2.22, -1.7), (1.14, 0.1, 0.06), trim)
-    box("doorknob", 2, (0.36, 1.0, -1.79), (0.05, 0.05, 0.05), chrome)
+        box("doorframe", -1, (dx, 1.1, -1.7), (0.08, 2.2, 0.06), trim)
+    box("doorframe", -1, (0, 2.22, -1.7), (1.14, 0.1, 0.06), trim)
+    box("doorknob", -1, (0.36, 1.0, -1.79), (0.05, 0.05, 0.05), chrome)
     # Wainscot and baseboard.
     for i, cx in enumerate((-1.8, 1.8, 3.6)):
-        box("baseboard", i + 1 if i < 2 else 4, (cx, 0.07, -1.69), (1.8, 0.14, 0.03), trim, 0.002)
-    box("wainscot", 4, (3.6, 0.5, -1.69), (1.8, 1.0, 0.02), mint, 0.0)
-    box("chair_rail", 4, (3.6, 1.02, -1.68), (1.8, 0.05, 0.04), trim, 0.002)
+        box("baseboard", -1, (cx, 0.07, -1.69), (1.8, 0.14, 0.03), trim, 0.002)
+    box("wainscot", -1, (3.6, 0.5, -1.69), (1.8, 1.0, 0.02), mint, 0.0)
+    box("chair_rail", -1, (3.6, 1.02, -1.68), (1.8, 0.05, 0.04), trim, 0.002)
 
     # Windows (glass objects 5 and 6): frames, mullions and panes.
     glass_m = glass()
@@ -574,11 +574,34 @@ def build():
             box("facade_window", -1, (fx * 2.1, fy, -12.8), (1.0, 1.5, 0.05), dark_glass, 0)
             box("facade_sill", -1, (fx * 2.1, fy - 0.8, -12.75), (1.2, 0.08, 0.12), trim, 0)
     box("street", -1, (0, -3.0, -8.0), (40.0, 0.1, 12.0), subfloor, 0)
-    # Hallways behind the side partitions.
+    # Two furnished side rooms open up when the interior partitions break.
+    annex_rug = rug_material()
     for s in (-1, 1):
         box("hall_floor", -1, (s * 6.0, -0.005, -0.3), (2.6, 0.02, 3.2), oak, 0)
         box("hall_wall", -1, (s * 7.3, 1.65, -0.3), (0.2, 3.3, 3.4), lavender if s > 0 else brick, 0)
         box("hall_ceiling", -1, (s * 6.0, 3.35, -0.3), (2.8, 0.1, 3.4), ceiling, 0)
+        box("annex_back", -1, (s * 5.9, 1.65, -1.87), (2.8, 3.3, 0.18), mint if s > 0 else brick, 0)
+        box("annex_skirt", -1, (s * 5.9, 0.09, -1.75), (2.8, 0.18, 0.05), trim)
+        box("annex_rail", -1, (s * 5.9, 2.88, -1.75), (2.8, 0.12, 0.08), trim)
+        for x in (s * 4.85, s * 6.95):
+            box("annex_pilaster", -1, (x, 1.65, -1.75), (0.12, 3.1, 0.12), trim)
+        box("annex_rug", -1, (s * 5.8, 0.012, 0.05), (2.15, 0.018, 1.7), annex_rug, 0.005)
+        box("annex_sconce", -1, (s * 5.8, 2.38, -1.65), (0.46, 0.14, 0.18), chrome)
+        box("annex_glow", -1, (s * 5.8, 2.30, -1.59), (0.34, 0.05, 0.11),
+            emissive(f"annex_lamp_{s}", (1.0, 0.72, 0.42), 5.0))
+
+    # Left room: reading corner and shelves along the back wall.
+    place("wooden_bookshelf_worn", -1, -6.65, -1.35, 0, ("h", 2.05), tris=4500)
+    place("side_table_01", -1, -5.08, -1.27, 0, ("h", 0.62), tris=3000)
+    place("book_encyclopedia_set_01", -1, -5.08, -1.27, 0, ("w", 0.45), y=0.64, tris=1600)
+    place("painted_wooden_chair_02", -1, -6.12, -0.95, -35, ("h", 0.9), tris=3500)
+    place("hanging_picture_frame_02", -1, -5.20, -1.74, 0, ("w", 0.72), y=1.78, tris=1600)
+    # Right room: a sitting area with plants and a cabinet.
+    place("ArmChair_01", -1, 5.08, -1.06, 25, ("h", 0.94), tris=4500)
+    place("side_table_tall_01", -1, 6.02, -1.32, 0, ("h", 0.68), tris=2500)
+    place("brass_vase_02", -1, 6.02, -1.32, 0, ("h", 0.24), y=0.68, tris=1200)
+    place("potted_plant_04", -1, 6.85, -1.30, 0, ("h", 1.38), tris=4500)
+    place("hanging_picture_frame_03", -1, 5.72, -1.74, 0, ("w", 0.92), y=1.76, tris=1600)
 
     # Furniture. Owners follow room.rs; -1 stays put.
     place("round_wooden_table_01", 7, -1.45, -0.7, 0, ("h", 0.76))
@@ -601,10 +624,10 @@ def build():
     place("throw_pillows_01", -1, 1.35, -1.22, 0, ("w", 1.4), y=0.42)
     place("ArmChair_01", -1, 2.75, -1.0, -25, ("h", 1.0), tint=(1.12, 1.08, 1.0), tris=6000)
     place("side_table_tall_01", -1, 0.1, -1.55, 0, ("h", 0.7))
-    place("fancy_picture_frame_01", 3, 1.3, -1.69, 0, ("w", 0.9), y=1.45)
-    place("hanging_picture_frame_03", 1, -1.6, -1.69, 0, ("h", 0.55), y=1.35)
-    place("fancy_picture_frame_02", 4, 3.7, -1.69, 0, ("h", 0.6), y=1.35)
-    place("wall_clock", 0, -3.9, -1.69, 0, ("h", 0.32), y=2.0)
+    place("fancy_picture_frame_01", -1, 1.3, -1.69, 0, ("w", 0.9), y=1.45)
+    place("hanging_picture_frame_03", -1, -1.6, -1.69, 0, ("h", 0.55), y=1.35)
+    place("fancy_picture_frame_02", -1, 3.7, -1.69, 0, ("h", 0.6), y=1.35)
+    place("wall_clock", -1, -3.9, -1.69, 0, ("h", 0.32), y=2.0)
     place("brass_vase_02", -1, -3.9, -1.45, 0, ("h", 0.3), y=0.92)
     # Books on the divider shelves.
     for y in (0.59, 1.09, 1.59):
@@ -634,6 +657,14 @@ def build():
         po = bpy.data.objects.new(f"lamp{x}", p)
         bpy.context.collection.objects.link(po)
         po.location = game(x, 2.22, -0.45)
+    for x in (-5.8, 5.8):
+        p = bpy.data.lights.new(f"annex_lamp{x}", "POINT")
+        p.energy = 95
+        p.color = (1.0, 0.70, 0.44) if x < 0 else (0.74, 0.82, 1.0)
+        p.shadow_soft_size = 0.25
+        po = bpy.data.objects.new(f"annex_lamp{x}", p)
+        bpy.context.collection.objects.link(po)
+        po.location = game(x, 2.3, -1.45)
     fill = bpy.data.lights.new("fill", "AREA")
     fill.energy = 90
     fill.size = 6
@@ -683,7 +714,9 @@ if __name__ == "__main__":
     preview = arg("--preview")
     if preview:
         setup_cycles(int(arg("--samples", "96")))
-        camera((0.0, 1.25, 5.0), (0.0, 1.05, 0.0), 0.62)
+        view = arg("--view", "centre")
+        x = {"left": -5.8, "right": 5.8}.get(view, 0.0)
+        camera((x, 1.25, 5.0), (x, 1.05, 0.0), 0.62)
         scene = bpy.context.scene
         scene.render.resolution_x, scene.render.resolution_y = 1280, 720
         scene.render.filepath = os.path.abspath(preview)

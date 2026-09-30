@@ -44,7 +44,7 @@ Principles:
 
 | Path | What |
 |---|---|
-| `combat/` | Crate `arena-combat` (lib + cdylib). `lib.rs` — `Match`, `Fighter`, `step()`, hit resolution, physics, walls, room damage, throws (`held`), settle after rounds, bot AI, wasm exports `arena_reset/step/bot/forfeit/state/state_len`; `moves.rs` — frame data table + cancel rules; `room.rs` — 20 breakable room objects (ids stable, positions in mm). 24 tests. |
+| `combat/` | Crate `arena-combat` (lib + cdylib). `lib.rs` — `Match`, `Fighter`, `step()`, hit resolution, physics, walls, room damage, throws (`held`), settle after rounds, bot AI, wasm exports `arena_reset/step/bot/forfeit/state/state_len`; `moves.rs` — frame data table + cancel rules; `room.rs` — 20 stable room object IDs (0–4 fixed exterior, 5–19 breakable). |
 | `src/engine/` | Engine (from an earlier "dance" game, kept): `app.rs` scene loop on miniquad; `graphics.rs` 2D sprite batch + wrappers for 3D (`draw_skinned`, `draw_baked`, `upload_*`); `render3d.rs` pipelines & GLSL (lit skinned, double-sided, mirrored, planar stencil shadow, baked-unlit, glass); `gltf.rs` GLB loader (skin, skeleton reduction to 72 bones, clip retargeting by bone name, `load_scene` per node); `skeleton.rs` (`MAX_BONES = 72`); `physics.rs` (`Fragment` debris); `math3.rs`, `mesh3.rs`, `assets.rs`, `audio.rs`, … |
 | `src/game/fight.rs` | `FightScene`: reads state JSON from the page each frame, timeline interpolation, events, camera band, effects, fighters, room; loads fighters by path (`window.arenaFighters`), the baked room, fight packs. |
 | `src/game/fighter_model.rs` | `FighterModel` + `Avatar` (per body: character, rig, bones, captured clips). Picks a `Clip` from `Fighter` state, maps it to a captured take (`take_for`), warps time with marks, root motion (`Travel`), layers (walk blend, crouch upper body, uppercut rising from crouch, recoil lean, fists), bone-space cross-fades, mirroring of the right fighter. Tests pose every state. |
@@ -112,14 +112,18 @@ Principles:
   first two-hand reach. Knockdown lasts `KNOCKDOWN = 72` ticks, a grip
   `HOLD = 32`.
 - Baked room: `tools/room/build_room.py` (Blender, Poly Haven CC0 assets,
-  owners per mesh) → `tools/room/bake_room.py` (Cycles GPU bake per group,
-  AgX, smart UV, pieces split by loose parts) → `assets/room.glb` (~7 MB).
+  owners per mesh, central apartment and two furnished side rooms) →
+  `tools/room/bake_room.py` (Cycles GPU bake per group, AgX, smart UV,
+  pieces split by loose parts) → `assets/room.glb`. The permanent exterior
+  shell is in fixed groups; only furnishings and interior dividers scatter.
   Rendered unlit (`pipeline_baked`); fighters get a matching light rig.
 
 ## 5. Combat core essentials (`combat/`)
 
-- Units: millimetres and ticks (60 Hz). Arena walls at ±3000 mm, ±4200 when a
-  wall is broken. Rounds 60 s, first to 2.
+- Units: millimetres and ticks (60 Hz). Breakable dividers at ±3000 mm and
+  interior partitions at ±4500 mm; opening both allows fighters into the side
+  rooms up to fixed bounds at ±6400 mm.
+  The back exterior wall never breaks. Rounds 60 s, first to 2.
 - Actions: 0 idle, 1 jab, 2 heavy (overhead), 3 dash, 4 throw, 5 hitstun,
   8 kick, 9 sweep, 10 uppercut, 11 cross, 12 roundhouse, 13 air kick,
   14 special, 15 knockdown, 19 room smash.

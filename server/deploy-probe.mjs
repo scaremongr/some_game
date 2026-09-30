@@ -32,7 +32,7 @@ try {
   const ma=await a.wait('match'),mb=await b.wait('match');assert.equal(ma.code,mb.code);
   const sa=await a.wait('state',m=>m.state.phase===1);
   const sb=await b.wait('state',m=>m.state.tick===sa.state.tick);
-  assert.deepEqual(sa.state,sb.state);assert.equal(sa.state.walls[0].hp,75);
+  assert.deepEqual(sa.state,sb.state);assert.equal(sa.state.walls[0].hp,110);
   assert.equal(sa.state.objects.length,20);assert.equal(sa.state.fighters[0].meter,400);
   a.send({type:'input',seq:1,bits:2048});
   const smashed=await a.wait('state',m=>m.state.objects.some(o=>o.hp===0));

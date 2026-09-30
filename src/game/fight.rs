@@ -383,7 +383,11 @@ impl FightScene {
                     }
                 }
             }
-            let bound = |wall: usize| if current.walls[wall].hp > 0 { 2.95 } else { 4.1 };
+            let bound = |side: usize| {
+                if current.walls[side].hp > 0 { 2.95 }
+                else if current.objects[18 + side].hp > 0 { 4.45 }
+                else { 6.35 }
+            };
             let view = View {
                 dt,
                 time: self.time,
@@ -788,7 +792,18 @@ impl Scene for FightScene {
                 let team = Color::hex(if i == 0 { 0x57F0CE } else { 0xFF7965 });
                 let flash = self.hit_flash[i];
                 let white = Color::hex(0xFFFFFF);
+                // The east annex has a cool lamp; blend it in as a fighter
+                // crosses the divider so the model matches the baked room.
+                let cool = ((self.bodies[i].x - 3.2) / 1.5).clamp(0.0, 1.0);
+                let east = Color::hex(0xC7DDFF);
+                let key_color = Color {
+                    r: lighting.key_color.r + (east.r - lighting.key_color.r) * cool,
+                    g: lighting.key_color.g + (east.g - lighting.key_color.g) * cool,
+                    b: lighting.key_color.b + (east.b - lighting.key_color.b) * cool,
+                    a: 1.0,
+                };
                 let team_light = Lighting {
+                    key_color,
                     rim_color: Color {
                         r: team.r + (white.r - team.r) * flash,
                         g: team.g + (white.g - team.g) * flash,

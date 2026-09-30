@@ -37,12 +37,17 @@ WORK = os.path.join(os.path.dirname(OUT), "room_bake")
 
 def static_group(o):
     n = o.name.lower()
-    if any(n.startswith(k) for k in ("facade", "street", "hall")):
+    if n.startswith(("facade", "street")):
         return "outside"
+    if n.startswith(("hall", "annex")):
+        return "annex"
+    if n.startswith(("backwall", "door", "baseboard", "wainscot", "chair_rail")):
+        return "shell"
     if n.startswith(("floor", "rug", "kitchen_floor")):
         return "floor"
     if o.get("asset"):
-        return "furniture"
+        x = (o.matrix_world @ Vector((0, 0, 0))).x
+        return "furniture_west" if x < -4.5 else "furniture_east" if x > 4.5 else "furniture_center"
     if n.startswith(("ceiling", "beam", "crown")):
         return "ceiling"
     return "fixtures"
@@ -143,8 +148,10 @@ def unwrap(o):
 
 
 # Texel budget per group: what the camera sees up close gets more.
-DETAIL = {"s_outside": 0.35, "s_ceiling": 0.4, "o21": 0.6, "o12": 0.7}
-LIMIT = {"s_floor": 2048, "o16": 2048, "o17": 2048}
+DETAIL = {"s_outside": 0.35, "s_ceiling": 0.4, "s_annex": 0.8,
+          "s_shell": 0.9, "o21": 0.6, "o12": 0.7}
+LIMIT = {"s_floor": 2048, "s_annex": 2048, "s_shell": 2048,
+         "o16": 2048, "o17": 2048}
 
 
 def texture_size(o):
@@ -153,6 +160,8 @@ def texture_size(o):
     size = 128
     while size < side and size < LIMIT.get(o.name, 1024):
         size *= 2
+    if o.name.startswith("s_furniture"):
+        size = max(size, 2048)
     return size
 
 
