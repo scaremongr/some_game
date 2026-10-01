@@ -27,9 +27,15 @@ try {
   assert.ok((await state()).fighters[0].combo_damage<34);
   await p.screenshot({path:'artifacts/combo-roundhouse.png'});
   await p.waitForTimeout(1200);
-  const before=(await state()).objects.filter(o=>o.hp===0).length;
+  // The approach can stop outside smash range of the intact coffee table at -500 mm.
+  await p.keyboard.down('a');
+  await wait(()=>JSON.parse(new TextDecoder().decode(window.arenaRenderBytes)).fighters[0].x<0);
+  await p.keyboard.up('a');
+  const before=await state();
+  assert.ok(before.objects[7].hp>0,'The coffee table must be intact before the smash');
+  assert.ok(Math.abs(before.fighters[0].x+500)<=950,'The coffee table must be in smash range');
   await p.click('#room-damage');await p.waitForTimeout(1200);
-  assert.ok((await state()).objects.filter(o=>o.hp===0).length>before);
+  assert.equal((await state()).objects[7].hp,0,'The smash must destroy the coffee table');
   await p.screenshot({path:'artifacts/room-destroyed.png'});
   await p.keyboard.press('w');
   await wait(()=>JSON.parse(new TextDecoder().decode(window.arenaRenderBytes)).fighters[0].y>500);

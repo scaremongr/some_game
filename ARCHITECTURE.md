@@ -6,6 +6,8 @@ where, how the pieces talk, how to build, test and ship, and the traps.
 Player-facing details are in [README.md](README.md) (Russian); the network
 protocol in [docs/PROTOCOL.md](docs/PROTOCOL.md); bot setup in
 [docs/bot-kit/README.md](docs/bot-kit/README.md).
+Combat research and proposed development priorities (Russian, 2026-10-01):
+[docs/COMBAT_RESEARCH.md](docs/COMBAT_RESEARCH.md).
 
 - Live game: https://serbiamarket.duckdns.org/dance/index.html
 - Telegram: https://t.me/somee_game_bot?startapp=fight_home (bot `@somee_game_bot`)
