@@ -158,17 +158,21 @@ Principles:
   walked picks the clip time. The standing foot stays planted (test
   `captured_walks_keep_the_standing_foot_planted`, < 2 mm/frame). Walk speed
   24 mm/tick forward, 20 back, 12 guarded or crouched (`WALK_FORWARD/BACK/SLOW`
-  in `combat`). Faster than the clip's own pace (up to ~1.55× its cadence)
-  the strides lengthen instead (`feet::stretch_stride`: each foot's fore-aft
-  offset from its cycle mean grows, legs reach with IK, the hips sink) and the
-  cycle plays proportionally slower per metre. A guarded walk keeps the block
-  arms; `feet.rs` plants the feet once the walk stops.
+  in `combat`). The cycle keeps its captured (narrow) stride, so a faster
+  walk steps quicker — a shuffle; wide stretched strides were rejected. A
+  guarded walk keeps the block arms; `feet.rs` plants the feet once the walk
+  stops.
 - Knockout: the body follows the simulation (which keeps falling and sliding
-  through the round's end, `Match::settle`): a launched body plays `air_hit`
-  landing with the simulated body, then `air_down` from the landing, limp
-  (physical layer); one knocked out on its feet plays `ko`. The KO slow
-  motion slows the whole view (`FightScene::lag`: the view falls behind the
-  simulation and catches up at 1.6×), so the flight is slowed, not cut.
+  through the round's end, `Match::settle`): a body in the air plays `air_hit`
+  landing with the simulated body, then lies as `ko` ends (from its floor
+  contact); one on its feet plays `ko` (firm drive while falling, limp once
+  down); one already on the floor stays down. The KO slow motion slows the
+  whole view (`FightScene::view`: the shown tick advances slower, never runs
+  backwards, then catches up at 1.6×; the slow motion plays once a round —
+  a view running backwards replayed the final blow forever).
+- Joint ranges (`ragdoll.rs` `JOINTS`): knees and elbows are hinges (about
+  the animated bend axis, 0–150°), spine 20° per segment, neck 35°, head 30°,
+  shoulders 70°, hips 55° around the animated pose; the pelvis is rigid.
 - Baked room: `tools/room/apartment.py` authors five open furnished rooms;
   `build_room.py` supplies Blender import/material/preview helpers. CC0 Poly Haven
   assets and seamless architectural surfaces, with 22 additional model types.

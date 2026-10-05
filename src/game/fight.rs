@@ -142,10 +142,11 @@ pub struct FightScene {
     layout: [f32; 4],
     /// Seconds of knockout slow motion left, and who has been seen KO'd.
     slowmo: f32,
-    /// Ticks the view runs behind the simulation: the knockout's slow
-    /// motion slows the whole scene (bodies fly slower too), then it
-    /// catches up.
-    lag: f64,
+    /// The tick on screen. It follows the simulation's clock, except in the
+    /// knockout's slow motion, when it advances slower (bodies fly slower
+    /// too) and then catches up; it never runs backwards.
+    view: f64,
+    /// Knocked out this round (the slow motion plays once).
     knocked: [bool; 2],
     /// 0..1: the camera has moved in on the dancing winner.
     celebrate: f32,
@@ -211,7 +212,7 @@ impl FightScene {
             debug_camera: None,
             layout: [0.16, 0.95, 0.0, 1.0],
             slowmo: 0.0,
-            lag: 0.0,
+            view: f64::NAN,
             knocked: [false; 2],
             celebrate: 0.0,
         }
@@ -231,7 +232,8 @@ impl FightScene {
             self.last_event = state.event;
             self.reaction = [Reaction::Head; 2];
             self.celebrate = 0.0;
-            self.lag = 0.0;
+            self.view = f64::NAN;
+            self.knocked = [false; 2];
             if let Some(model) = &mut self.model {
                 model.reset();
             }
@@ -410,25 +412,8 @@ impl FightScene {
 
     /// Everything visual, at the display's refresh rate.
     fn animate(&mut self, dt: f32, render_tick: f64) {
-        let render_tick = render_tick - self.lag;
-        let Some(sample) = self.timeline.sample(render_tick) else {
-            return;
-        };
-        let current = self.timeline.get(sample.index).cloned().unwrap_or_else(|| self.state.clone());
-        self.fighters = sample.fighters;
-        self.bodies = sample.bodies;
-        let preview = self.preview();
         // Knockout: the final blow plays out in slow motion, then eases back.
         const SLOWMO: f32 = 1.1;
-        for side in 0..2 {
-            let out = self.fighters[side].hp == 0;
-            if out && !self.knocked[side] && !preview {
-                self.slowmo = SLOWMO;
-                self.shake = 1.0;
-                self.punch = 1.0;
-            }
-            self.knocked[side] = out;
-        }
         let real_dt = dt;
         let speed = if self.slowmo > 0.0 {
             let k = 1.0 - self.slowmo / SLOWMO;
@@ -437,14 +422,35 @@ impl FightScene {
             1.0
         };
         let dt = dt * speed;
-        // The simulation does not slow down: the view falls behind it and
-        // then catches up at 1.6 times the speed.
-        self.lag = if self.slowmo > 0.0 {
-            self.lag + (1.0 - speed as f64) * real_dt as f64 * 60.0
-        } else {
-            (self.lag - real_dt as f64 * 60.0 * 0.6).max(0.0)
-        };
         self.slowmo = (self.slowmo - real_dt).max(0.0);
+        // The simulation does not slow down: the view falls behind it,
+        // never runs backwards, and catches up at 1.6 times the speed.
+        let render_tick = if !render_tick.is_finite() {
+            render_tick
+        } else if !self.view.is_finite() || (render_tick - self.view).abs() > 90.0 {
+            render_tick
+        } else {
+            let rate = if speed < 1.0 { speed as f64 } else { 1.6 };
+            (self.view + real_dt as f64 * 60.0 * rate).min(render_tick).max(self.view)
+        };
+        self.view = render_tick;
+        let Some(sample) = self.timeline.sample(render_tick) else {
+            return;
+        };
+        let current = self.timeline.get(sample.index).cloned().unwrap_or_else(|| self.state.clone());
+        self.fighters = sample.fighters;
+        self.bodies = sample.bodies;
+        let preview = self.preview();
+        for side in 0..2 {
+            if self.fighters[side].hp == 0 && !self.knocked[side] {
+                self.knocked[side] = true;
+                if !preview {
+                    self.slowmo = SLOWMO;
+                    self.shake = 1.0;
+                    self.punch = 1.0;
+                }
+            }
+        }
         if current.phase != self.phase {
             self.phase = current.phase;
             self.phase_time = 0.0;

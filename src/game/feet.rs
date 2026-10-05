@@ -165,41 +165,6 @@ impl Feet {
     }
 }
 
-/// Lengthens the steps of a captured walk: each foot's distance fore and aft
-/// from its average place under the hips (`means`, toe z in body space over
-/// the cycle) grows by `stretch`, so a faster walk takes longer strides
-/// instead of quicker ones; the legs reach with IK, the hips sink if needed.
-/// The walk must then play `1 + stretch` times slower per metre.
-#[allow(clippy::too_many_arguments)]
-pub fn stretch_stride(
-    skeleton: &Skeleton,
-    pose: &mut Pose,
-    globals: &mut Vec<Mat4>,
-    body: Mat4,
-    hips: usize,
-    legs: [[usize; 3]; 2],
-    toes: [usize; 2],
-    means: [f32; 2],
-    stretch: f32,
-) {
-    if stretch <= 1e-3 {
-        return;
-    }
-    skeleton.global_matrices(pose, globals);
-    let at = |globals: &Vec<Mat4>, bone: usize| body.transform_point(globals[bone].transform_point(Vec3::ZERO));
-    let centre = at(globals, hips).z;
-    let targets = [0, 1].map(|i| {
-        let off = at(globals, toes[i]).z - centre - means[i];
-        at(globals, legs[i][2]) + vec3(0.0, 0.0, off * stretch)
-    });
-    let to_model = body.invert();
-    let sink = sink_needed(globals, body, legs, targets);
-    lower_hips(skeleton, pose, globals, to_model, hips, sink);
-    for i in 0..2 {
-        reach(skeleton, pose, globals, body, to_model, legs[i], targets[i]);
-    }
-}
-
 /// How far the hips must come down for both ankles to reach their targets.
 fn sink_needed(globals: &[Mat4], body: Mat4, legs: [[usize; 3]; 2], targets: [Vec3; 2]) -> f32 {
     let at = |bone: usize| body.transform_point(globals[bone].transform_point(Vec3::ZERO));

@@ -6,8 +6,11 @@
 //! nothing happening the pose is exactly the animated one, strikes included.
 //! Hits push the struck particles and loosen them for a moment, the root's
 //! acceleration (a launch, a knockback, a landing) drags them by inertia,
-//! loose parts sag under gravity, bones keep their lengths and nothing goes
-//! through the floor. The bones are then turned to follow the particles.
+//! loose parts sag under gravity, bones keep their lengths, joints stay in
+//! their range (knees and elbows are hinges that bend one way; the spine,
+//! neck, shoulders and hips turn within cones around the animated pose) and
+//! nothing goes through the floor. The bones are then turned to follow the
+//! particles.
 //! Cosmetic and client side only, like the debris.
 use crate::engine::{math3::*, skeleton::{Pose, Skeleton}};
 
@@ -44,10 +47,14 @@ const RATE: [f32; N] = [
 const RADIUS: [f32; N] = [
     0.12, 0.12, 0.12, 0.08, 0.10, 0.10, 0.06, 0.05, 0.04, 0.06, 0.05, 0.04, 0.09, 0.06, 0.03, 0.09, 0.06, 0.03,
 ];
-/// Inverse mass in the length constraints (the pinned hips take nothing).
+/// Inverse mass in the length constraints (the pinned pelvis takes nothing).
 const GIVE: [f32; N] = [
-    0.0, 0.5, 0.5, 0.8, 1.0, 1.0, 0.8, 1.0, 1.0, 0.8, 1.0, 1.0, 0.6, 0.9, 1.0, 0.6, 0.9, 1.0,
+    0.0, 0.5, 0.5, 0.8, 1.0, 1.0, 0.8, 1.0, 1.0, 0.8, 1.0, 1.0, 0.0, 0.9, 1.0, 0.0, 0.9, 1.0,
 ];
+/// The pelvis is rigid and follows the animation: the hips and hip joints.
+fn pinned(i: usize) -> bool {
+    matches!(i, HIPS | L_UPLEG | R_UPLEG)
+}
 /// Lengths kept by the solver: the bones, then braces that keep the torso
 /// and pelvis rigid.
 const LINKS: [(usize, usize); 30] = [
@@ -81,6 +88,33 @@ const LINKS: [(usize, usize); 30] = [
     (L_ARM, L_UPLEG),
     (R_ARM, R_UPLEG),
     (SPINE, NECK),
+];
+
+/// A joint's range. `Cone`: the segment stays within this angle (radians)
+/// of where the animation puts it relative to its parent segment. `Hinge`:
+/// it bends only about the animated hinge axis, from straight to this angle.
+#[derive(Clone, Copy)]
+enum Range {
+    Cone(f32),
+    Hinge(usize, f32),
+}
+
+/// Segment (joint, child), its parent segment (None: the pinned hips, as
+/// animated), its range and the particles that move with the child.
+const JOINTS: [(usize, usize, Option<(usize, usize)>, Range, &[usize]); 13] = [
+    (HIPS, SPINE, None, Range::Cone(0.35), &[SPINE, CHEST, NECK, HEAD, TIP, L_ARM, L_FORE, L_HAND, R_ARM, R_FORE, R_HAND]),
+    (SPINE, CHEST, Some((HIPS, SPINE)), Range::Cone(0.35), &[CHEST, NECK, HEAD, TIP, L_ARM, L_FORE, L_HAND, R_ARM, R_FORE, R_HAND]),
+    (CHEST, NECK, Some((SPINE, CHEST)), Range::Cone(0.35), &[NECK, HEAD, TIP]),
+    (NECK, HEAD, Some((CHEST, NECK)), Range::Cone(0.6), &[HEAD, TIP]),
+    (HEAD, TIP, Some((NECK, HEAD)), Range::Cone(0.5), &[TIP]),
+    (L_ARM, L_FORE, Some((CHEST, NECK)), Range::Cone(1.2), &[L_FORE, L_HAND]),
+    (L_FORE, L_HAND, Some((L_ARM, L_FORE)), Range::Hinge(0, 2.6), &[L_HAND]),
+    (R_ARM, R_FORE, Some((CHEST, NECK)), Range::Cone(1.2), &[R_FORE, R_HAND]),
+    (R_FORE, R_HAND, Some((R_ARM, R_FORE)), Range::Hinge(1, 2.6), &[R_HAND]),
+    (L_UPLEG, L_LEG, None, Range::Cone(0.95), &[L_LEG, L_FOOT]),
+    (L_LEG, L_FOOT, Some((L_UPLEG, L_LEG)), Range::Hinge(2, 2.6), &[L_FOOT]),
+    (R_UPLEG, R_LEG, None, Range::Cone(0.95), &[R_LEG, R_FOOT]),
+    (R_LEG, R_FOOT, Some((R_UPLEG, R_LEG)), Range::Hinge(3, 2.6), &[R_FOOT]),
 ];
 
 /// Which part of the body a blow (or a landing) pushes.
@@ -201,6 +235,9 @@ pub struct Ragdoll {
     shock: [f32; N],
     root: Vec3,
     root_velocity: Vec3,
+    /// Hinge axes of the elbows and knees (body space) from the last frame
+    /// the animation bent them; zero until then.
+    hinge: [Vec3; 4],
 }
 impl Default for Ragdoll {
     fn default() -> Self {
@@ -211,6 +248,7 @@ impl Default for Ragdoll {
             shock: [0.0; N],
             root: Vec3::ZERO,
             root_velocity: Vec3::ZERO,
+            hinge: [Vec3::ZERO; 4],
         }
     }
 }
@@ -282,6 +320,21 @@ impl Ragdoll {
         }
         let floor = -root.y;
 
+        // Hinge axes: from the animated bend, or kept from the last frame
+        // it bent (kept square to the animated upper segment).
+        for &(a, b, parent, range, _) in &JOINTS {
+            let (Range::Hinge(k, _), Some((pa, _))) = (range, parent) else { continue };
+            let (upper, lower) = ((target[a] - target[pa]).normalize(), (target[b] - target[a]).normalize());
+            let bend = upper.cross(lower);
+            if bend.length() > 0.09 {
+                self.hinge[k] = bend.normalize();
+            } else if self.hinge[k].length() > 0.5 {
+                let kept = self.hinge[k] - upper * self.hinge[k].dot(upper);
+                if kept.length() > 1e-3 {
+                    self.hinge[k] = kept.normalize();
+                }
+            }
+        }
         let mut rest = [0.0; LINKS.len()];
         for (k, &(a, b)) in LINKS.iter().enumerate() {
             rest[k] = (target[a] - target[b]).length();
@@ -291,8 +344,10 @@ impl Ragdoll {
         for _ in 0..steps {
             let mut p = [Vec3::ZERO; N];
             for i in 0..N {
-                if i == HIPS {
+                if pinned(i) {
                     p[i] = target[i];
+                    self.offset[i] = Vec3::ZERO;
+                    self.velocity[i] = Vec3::ZERO;
                     continue;
                 }
                 // Control: 1 when the body holds this part, less when it is
@@ -316,14 +371,17 @@ impl Ragdoll {
                     p[a] += fix * GIVE[a];
                     p[b] = p[b] - fix * GIVE[b];
                 }
-                for i in 1..N {
+                limit_joints(&mut p, &target, &self.hinge);
+                for i in (0..N).filter(|&i| !pinned(i)) {
                     let low = floor + RADIUS[i];
                     if p[i].y < low {
                         p[i].y = low;
                     }
                 }
             }
-            for i in 1..N {
+            // The joints have the last word (the floor only nudges).
+            limit_joints(&mut p, &target, &self.hinge);
+            for i in (0..N).filter(|&i| !pinned(i)) {
                 let offset = p[i] - target[i];
                 let mut v = (offset - self.offset[i]) * (1.0 / h);
                 // The floor stops a body dead (no bounce) and drags it.
@@ -381,6 +439,61 @@ impl Ragdoll {
         let at = joint(globals, rig.bones[HEAD]);
         let tip = (body * globals[rig.bones[HEAD]]).transform_point(tip_local);
         turn(rig.bones[HEAD], Quat::from_rotation_arc(tip - at, p[TIP] - at), at, pose, globals);
+    }
+}
+
+/// Keeps every joint of `p` in its range (`JOINTS`), root to tips; a moved
+/// segment carries the particles beyond it.
+fn limit_joints(p: &mut [Vec3; N], target: &[Vec3; N], hinge: &[Vec3; 4]) {
+    for &(a, b, parent, range, moves) in &JOINTS {
+        let d = p[b] - p[a];
+        let len = d.length();
+        if len < 1e-5 {
+            continue;
+        }
+        let dir = d * (1.0 / len);
+        // The parent's turn away from the animation, applied to the
+        // animated segment: where the joint, as animated, would put it.
+        let animated = (target[b] - target[a]).normalize();
+        let turn = match parent {
+            Some((pa, pb)) => Quat::from_rotation_arc((target[pb] - target[pa]).normalize(), (p[pb] - p[pa]).normalize()),
+            None => Quat::IDENTITY,
+        };
+        let wanted = match range {
+            Range::Cone(max) => {
+                let expected = turn.rotate(animated);
+                if dir.dot(expected) >= max.cos() {
+                    continue;
+                }
+                let mut axis = expected.cross(dir);
+                if axis.length() < 1e-6 {
+                    axis = expected.cross(if expected.x.abs() < 0.9 { Vec3::X } else { Vec3::Y });
+                }
+                Quat::from_axis_angle(axis.normalize(), max).rotate(expected)
+            }
+            Range::Hinge(k, max) => {
+                let Some((pa, _)) = parent else { continue };
+                if hinge[k].length() < 0.5 {
+                    continue;
+                }
+                let upper = (p[a] - p[pa]).normalize();
+                let axis = turn.rotate(hinge[k]);
+                let axis = (axis - upper * axis.dot(upper)).normalize();
+                // Bend only about the axis, from straight to `max`.
+                let flat = dir - axis * dir.dot(axis);
+                let angle = if flat.length() < 1e-5 { 0.0 } else { upper.cross(flat).dot(axis).atan2(upper.dot(flat)) };
+                let angle = angle.clamp(0.0, max);
+                let bent = Quat::from_axis_angle(axis, angle).rotate(upper);
+                if (bent - dir).length() < 1e-4 {
+                    continue;
+                }
+                bent
+            }
+        };
+        let shift = p[a] + wanted * len - p[b];
+        for &i in moves {
+            p[i] += shift;
+        }
     }
 }
 
@@ -475,6 +588,60 @@ mod tests {
         let mut pose = rest.clone();
         doll.apply(&rig, &c.skeleton, &mut pose, &mut globals, c.transform, Mat4::IDENTITY, Vec3::ZERO, Vec3::ZERO, Drive::FULL, 1.0 / 60.0);
         assert!((head(&pose, &mut globals) - still).length() < 0.01, "the head came back");
+    }
+
+    /// Flexion of the joint at `b` (between segments a-b and b-c) about
+    /// the animated hinge axis turned with the upper segment, as the solver
+    /// sees it.
+    fn flexion(p: &[Vec3; N], t: &[Vec3; N], a: usize, b: usize, c: usize, axis: Vec3) -> f32 {
+        let (u, v) = ((p[b] - p[a]).normalize(), (p[c] - p[b]).normalize());
+        let axis = Quat::from_rotation_arc((t[b] - t[a]).normalize(), u).rotate(axis);
+        u.cross(v).dot(axis).atan2(u.dot(v))
+    }
+
+    #[test]
+    fn a_limp_tumbling_body_keeps_its_joints_in_range() {
+        let (c, rig) = load();
+        let rest = c.skeleton.rest_pose();
+        let mut globals = Vec::new();
+        let mut doll = Ragdoll::default();
+        // A bent stance teaches the hinge axes, as a fight does.
+        let mut stance = rest.clone();
+        for (leg, bend) in [(rig.leg(0), 0.5f32), (rig.leg(1), 0.5)] {
+            stance.locals[leg[1]].rotation = (Quat::from_axis_angle(Vec3::X, bend) * stance.locals[leg[1]].rotation).normalize();
+        }
+        let limp = Drive { torso: 0.2, head: 0.1, arms: 0.05, legs: 0.05, inertia: 1.0 };
+        let joints = |pose: &Pose, globals: &mut Vec<Mat4>| -> [Vec3; N] {
+            c.skeleton.global_matrices(pose, globals);
+            std::array::from_fn(|i| c.transform.transform_point(globals[rig.bones[i]].transform_point(Vec3::ZERO)))
+        };
+        let mut pose = stance.clone();
+        doll.apply(&rig, &c.skeleton, &mut pose, &mut globals, c.transform, Mat4::IDENTITY, Vec3::ZERO, Vec3::ZERO, Drive::FULL, 1.0 / 60.0);
+        let animated = joints(&stance, &mut globals);
+        let (mut worst_knee, mut worst_elbow): (f32, f32) = (0.0, 0.0);
+        for frame in 0..300 {
+            if frame % 40 == 0 {
+                // Kicked about from every side.
+                let a = frame as f32 * 0.7;
+                doll.push(Part::Body, vec3(a.cos(), 0.6, a.sin()) * 6.0);
+                doll.push(Part::Legs, vec3(-a.sin(), -0.4, a.cos()) * 6.0);
+            }
+            let mut pose = stance.clone();
+            doll.apply(&rig, &c.skeleton, &mut pose, &mut globals, c.transform, Mat4::IDENTITY, Vec3::ZERO, Vec3::ZERO, limp, 1.0 / 60.0);
+            let j = joints(&pose, &mut globals);
+            for (k, (a, b, cc)) in [(2, (L_UPLEG, L_LEG, L_FOOT)), (3, (R_UPLEG, R_LEG, R_FOOT)), (0, (L_ARM, L_FORE, L_HAND)), (1, (R_ARM, R_FORE, R_HAND))] {
+                if doll.hinge[k].length() < 0.5 {
+                    continue;
+                }
+                let f = flexion(&j, &animated, a, b, cc, doll.hinge[k]);
+                let out = if f < 0.0 { -f } else { (f - 2.6).max(0.0) };
+                if k >= 2 { worst_knee = worst_knee.max(out) } else { worst_elbow = worst_elbow.max(out) }
+            }
+        }
+        // Small residue: the bones follow the particles after the floor.
+        assert!(worst_knee < 0.15, "a knee bent {worst_knee} rad the wrong way");
+        assert!(worst_elbow < 0.15 || doll.hinge[0].length() < 0.5, "an elbow bent {worst_elbow} rad the wrong way");
+        assert!(doll.hinge[2].length() > 0.5, "knee axes learned");
     }
 
     #[test]
