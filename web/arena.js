@@ -1,4 +1,5 @@
 import { simulation } from './combat.js';
+import { Prediction } from './predict.js';
 import { loadCity, showPeople as showRoomPictures } from './scenery.js';
 import * as sfx from './sound.js';
 const $ = id => document.getElementById(id);
@@ -17,6 +18,9 @@ let reconnectTimer, reconnectStarted = 0, toastTimer, paused = false, rematchPos
 let wallImpacts = [0, 0], wallRound = 0;
 let bits = 0, shownBits = -1, lastSent = 0, stopped = false, trainingMode = 0;
 let simTime = 0, netOffset = null, pendingEdges = 0, openedByLink = false;
+// Online prediction (see "Online prediction" below); ?predict=0 turns it off.
+const PREDICT = !/[?&]predict=0\b/.test(location.search);
+let net = null;
 // Match end: the winner dances under a banner, the result card follows.
 let ended = 0, resultShown = false, resultTimer;
 const held = new Map(), latched = new Map();
@@ -367,7 +371,7 @@ const HEAVY = new Set([2, 9, 10, 12, 13, 14, 18, 19]), MEDIUM = new Set([8, 11, 
 const ATTACKS = new Set([1, 2, 4, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18, 19]);
 const weightOf = action => HEAVY.has(action) ? 0.85 : MEDIUM.has(action) ? 0.55 : 0.3;
 // Sounds follow the picture: online it trails the newest snapshot.
-const soundDelay = () => mode === 'online' ? NET_DELAY / 60 : 0.015;
+const soundDelay = () => mode === 'online' && !net ? NET_DELAY / 60 : 0.015;
 function listen(st) {
   const delay = soundDelay();
   const count = Math.ceil(st.phase_ticks / 60), broken = st.objects.map(o => o.hp === 0);
@@ -406,12 +410,12 @@ function eventSound(kind, attacker) {
 window.arenaClock = () => {
   if (!state || !fighting()) return -1;
   const now = performance.now();
-  if (mode === 'local') return Math.max(0, state.tick - 1 + Math.min(1.5, Math.max(0, (now - simTime) / STEP)));
+  if (mode === 'local' || (mode === 'online' && net)) return Math.max(0, state.tick - 1 + Math.min(1.5, Math.max(0, (now - simTime) / STEP)));
   if (netOffset === null) return -1;
   return now / STEP + netOffset - NET_DELAY;
 };
-function accept(next, isPaused = false) {
-  state = next; paused = isPaused; lastSnapshot = performance.now();
+function accept(next, isPaused = false, final = next.phase === 3) {
+  state = next; paused = isPaused;
   window.arenaRenderBytes = encoder.encode(JSON.stringify(state));
   if (!fighting()) return;
   listen(state);
@@ -437,8 +441,8 @@ function accept(next, isPaused = false) {
   special.classList.toggle('breaker', breakerReady());
   relabel();
   const label = paused ? 'СОПЕРНИК ПЕРЕПОДКЛЮЧАЕТСЯ' : state.phase === 0 ? String(Math.max(1, Math.ceil(state.phase_ticks / 60))) : state.phase === 2 ? (state.winner < 0 ? 'НИЧЬЯ' : state.winner === side ? 'ТВОЙ РАУНД' : 'РАУНД СОПЕРНИКА')
-    : state.phase === 3 && !resultShown ? (state.winner < 0 ? 'НИЧЬЯ' : state.winner === side ? 'ПОБЕДА!' : 'ПОРАЖЕНИЕ') : '';
-  $('announcement').classList.toggle('final', state.phase === 3);
+    : state.phase === 3 && final && !resultShown ? (state.winner < 0 ? 'НИЧЬЯ' : state.winner === side ? 'ПОБЕДА!' : 'ПОРАЖЕНИЕ') : '';
+  $('announcement').classList.toggle('final', state.phase === 3 && final);
   text('announcement', label); show('announcement', !!label);
   if (state.event !== lastEvent) {
     lastEvent = state.event; eventUntil = performance.now() + 700;
@@ -448,7 +452,7 @@ function accept(next, isPaused = false) {
     eventSound(state.event_kind, state.fighters[1 - state.event_target].action);
     haptic(state.event_kind === 2 ? 'light' : state.event_target === side ? 'heavy' : 'medium');
   }
-  if (state.phase === 3) {
+  if (state.phase === 3 && final) {
     if (!ended) {
       // The banner first; the card slides in while the winner starts dancing.
       ended = performance.now(); show('controls', false); show('training-mode', false); show('room-damage', false); clearInput();
@@ -512,7 +516,7 @@ function connect() {
         const link = config.miniApp ? `${config.miniApp}?startapp=fight_${m.code}` : `${location.origin}${location.pathname}?room=${m.code}`;
         $('invite-link').value = link;
       } else if (m.type === 'match') {
-        clearInput(); local = null; side = m.side; lastEvent = 0; rematchPossible = true; rematchRequested = false; netOffset = null;
+        clearInput(); local = null; net = null; side = m.side; lastEvent = 0; rematchPossible = true; rematchRequested = false; netOffset = null;
         screen('online'); text('result-eyebrow', 'БОЙ ОКОНЧЕН'); text('mode', 'ОНЛАЙН · ВЫ ' + (side === 0 ? 'СЛЕВА' : 'СПРАВА'));
         m.players.forEach((p, i) => text('name-' + i, (i === side ? 'ВЫ · ' : '') + (p.league ? p.league.icon + ' ' : '') + p.name)); text('rematch', 'Реванш ↗'); $('rematch').disabled = false;
         showPeople(m.players.map((p, i) => ({ id: p.id, name: p.name, avatar: p.avatar || null, photo: i === side ? me.photo : null, league: p.league, rating: p.rating })));
@@ -528,7 +532,8 @@ function connect() {
       } else if (m.type === 'state' && mode === 'online') {
         const target = m.state.tick - performance.now() / STEP;
         netOffset = netOffset === null || Math.abs(target - netOffset) > 30 ? target : Math.max(target, netOffset - 0.03);
-        accept(m.state, m.paused);
+        lastSnapshot = performance.now();
+        if (!predict(m)) accept(m.state, m.paused);
       } else if (m.type === 'pong') { const ping = Math.max(0, Date.now() - m.at); if (mode === 'online') text('connection', ping + ' MS' + (ping > 180 ? ' · ВЫСОКИЙ ПИНГ' : '')); }
       else if (m.type === 'rematch') { text('rematch', m.votes === 1 ? (rematchRequested ? 'Ждём согласия соперника…' : 'Принять реванш ↗') : 'Новый бой'); }
       else if (m.type === 'left') {
@@ -598,7 +603,11 @@ function relabel() {
     b.classList.toggle('alt', next !== base);
   }
 }
-function sendInput() { if (mode === 'online' && authenticated) { send({ type: 'input', seq: ++seq, bits }); lastSent = performance.now(); } }
+function sendInput() {
+  if (mode !== 'online' || !authenticated) return;
+  send({ type: 'input', seq: ++seq, bits }); lastSent = performance.now();
+  net?.sending(seq);
+}
 function clearInput() { held.clear(); latched.clear(); bits = 0; pendingEdges = 0; sendInput(); showPressed(); resetStick(); }
 
 // Floating joystick: the ring appears under the thumb anywhere in the left zone.
@@ -697,6 +706,24 @@ $('share').onclick = () => {
 };
 $('training-mode').onclick = () => { trainingMode = (trainingMode + 1) % 4; text('training-mode', ['Бот: спарринг', 'Бот: манекен', 'Бот: верхний блок', 'Бот: нижний блок'][trainingMode]); };
 
+// ---- Online prediction (web/predict.js) -----------------------------------------
+function predict(m) {
+  if (!PREDICT || m.paused || !module) { net = null; return false; }
+  const now = performance.now();
+  if (!net || !net.snapshot(m, now)) net = new Prediction(module, side, m.state, now);
+  window.arenaNetStats = net.stats;
+  runAhead(now, true);
+  return true;
+}
+function runAhead(now, force = false) {
+  const steps = net.advance(now, bits, pendingEdges); pendingEdges = 0;
+  if (!steps && !force) return;
+  simTime = now;
+  const next = net.state();
+  // A predicted knockout waits for the server before the result shows.
+  accept(next, false, next.phase === 3 && net.authority.phase === 3);
+}
+
 // ---- Frame loop: local simulation at a fixed 60 Hz + adaptive resolution ----
 let previous = performance.now(), accumulator = 0, slow = 0, frameAvg = STEP;
 window.arenaMaxDpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -712,6 +739,7 @@ function frame(now) {
     simTime = now - accumulator; accept(local.state());
   } else accumulator = 0;
   if (mode === 'online') {
+    if (net && !document.hidden) runAhead(now);
     if (now - lastSent >= 33) sendInput();
     if (now - lastSnapshot > 1500 && state?.phase !== 3) { show('announcement'); text('announcement', 'ОЖИДАЕМ СВЯЗЬ…'); }
   }

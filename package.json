@@ -9,7 +9,8 @@
     "test": "node --test server/*.test.mjs",
     "test:browser": "node scripts/browser-test.mjs",
     "test:physics": "node scripts/physics-browser-test.mjs",
-    "test:combat": "node scripts/combat-browser-test.mjs"
+    "test:combat": "node scripts/combat-browser-test.mjs",
+    "test:netcode": "node scripts/netcode-test.mjs"
   },
   "dependencies": {
     "ws": "^8.18.3"

@@ -16,7 +16,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY server server
 COPY web/combat.js web/combat.js
-COPY web/index.html web/gl.js web/audio.js web/pose.js web/bridge.js web/arena.js web/arena.css web/combat.js ./dist/
+COPY web/index.html web/gl.js web/audio.js web/pose.js web/bridge.js web/arena.js web/arena.css web/combat.js web/predict.js web/scenery.js web/sound.js ./dist/
 COPY assets/ ./dist/assets/
 COPY --from=build /build/target/wasm32-unknown-unknown/release/some_game.wasm ./dist/
 COPY --from=build /build/combat/target/wasm32-unknown-unknown/release/arena_combat.wasm ./dist/

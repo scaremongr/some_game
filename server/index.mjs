@@ -24,6 +24,8 @@ async function loadRoster() {
 }
 export async function createArena(options = {}) {
   const dev = options.dev ?? false;
+  // Dev only: simulated round trip (ms), half each way, for netcode tests.
+  const latency = dev ? Math.max(0, Number(options.latency ?? process.env.PULSE_DEV_LATENCY ?? 0)) : 0;
   // The marketplace bot (opens the game via its Main Mini App) and the
   // game's own bot: initData signed by either is accepted.
   const botToken = options.botToken ?? process.env.BOT_TOKEN;
@@ -196,7 +198,9 @@ export async function createArena(options = {}) {
   function send(s, message) {
     if (s?.ws?.readyState === WebSocket.OPEN) {
       if (s.ws.bufferedAmount > 256 * 1024) { s.ws.terminate(); return; }
-      s.ws.send(JSON.stringify(message));
+      const text = JSON.stringify(message), ws = s.ws;
+      if (latency) setTimeout(() => { if (ws.readyState === WebSocket.OPEN) ws.send(text); }, latency / 2);
+      else ws.send(text);
     }
   }
   function broadcast(room, message) { room.players.forEach(s=>send(s,message)); }
@@ -206,7 +210,7 @@ export async function createArena(options = {}) {
     for (const s of room.players) if(s.room===room) {s.room=null;s.input=0;}
   }
   function snapshot(room, state = room.sim.state()) {
-    broadcast(room,{type:'state',state,paused:room.paused,ack:room.players.map(s=>s.seq)});
+    broadcast(room,{type:'state',state,paused:room.paused,ack:room.players.map(s=>s.seq),arrived:room.players.map(s=>s.arrived??0)});
     if(state.phase===3) finish(room, state);
   }
   // A finished online match: ratings, the players' result, the bot's news.
@@ -255,7 +259,7 @@ export async function createArena(options = {}) {
     let session=null, count=0, windowStart=Date.now();
     ws.alive=true; ws.on('pong',()=>{ws.alive=true;});
     const authTimer=setTimeout(()=>ws.close(4001,'Authentication timeout'),5000);
-    ws.on('message', data => {
+    const onMessage = data => {
       try {
         if(Date.now()-windowStart>=1000) {count=0;windowStart=Date.now();}
         if(++count>100) {ws.close(4008,'Rate limit');return;}
@@ -302,7 +306,10 @@ export async function createArena(options = {}) {
         if(m.type==='ping') {send(session,{type:'pong',at:m.at});return;}
         if(m.type==='input') {
           if(!Number.isSafeInteger(m.seq)||m.seq<=session.seq||!Number.isInteger(m.bits)||m.bits<0||m.bits>4095)return;
-          session.seq=m.seq;session.pending|=(m.bits & ~session.input & 3832);session.input=m.bits;session.lastInput=Date.now();return;
+          session.seq=m.seq;session.pending|=(m.bits & ~session.input & 3832);session.input=m.bits;session.lastInput=Date.now();
+          // The tick this input is applied at (the next step), echoed to the
+          // client to tune its prediction clock.
+          session.arrived=session.room?.sim ? session.room.sim.tick()+1 : 0;return;
         }
         if(m.type==='leave') {leave(session);send(session,{type:'lobby'});return;}
         if(m.type==='rematch' && session.room?.sim?.state().phase===3) {
@@ -360,7 +367,8 @@ export async function createArena(options = {}) {
         if(session)send(session,{type:'error',message:error.message});
         else {ws.send(JSON.stringify({type:'error',message:error.message}));ws.close(4003,'Authentication failed');}
       }
-    });
+    };
+    ws.on('message', data => latency ? setTimeout(onMessage, latency / 2, data) : onMessage(data));
     ws.on('error',()=>{});
     ws.on('close',()=>{
       clearTimeout(authTimer);

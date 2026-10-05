@@ -42,7 +42,7 @@ Held inputs expire after 250 ms without a fresh valid packet.
 | `queued` | — |
 | `room` | `code` |
 | `match` | `code`, `side:0\|1`, `players:[{id,name,fighter},{id,name,fighter}]` |
-| `state` | `state`, `paused`, `ack:[seq0,seq1]` |
+| `state` | `state`, `paused`, `ack:[seq0,seq1]`, `arrived:[tick0,tick1]` (the tick each player's acknowledged input is applied at) |
 | `pong` | `at` |
 | `rematch` | `votes` |
 | `left` | `name` |
@@ -79,9 +79,17 @@ clients have no authority. Hits resolve from both pre-hit states, allowing trade
 A 12-tick input buffer captures presses during hitstop. Early attack cancels
 require a confirmed hit and an allowed transition in `combat/src/moves.rs`
 (`cancel`); light strings may also continue after a block (`block_cancel`).
-Rendering smooths positions toward authoritative snapshots. There is currently
-**no rollback, client combat prediction or lag compensation**: high RTT delays
-attacks. The HUD flags RTT above 180 ms; a geographically close server matters.
+**Client prediction** (`web/predict.js`): the page runs the same WASM a few
+ticks ahead of the server, so a press shows on the next frame. Each snapshot is
+loaded into the client copy (`arena_alloc` + `arena_load`) and the inputs the
+server has not applied yet are replayed on top (rollback); the opponent is
+assumed to keep holding their last input (`fighters[i].previous`). The clock
+is tuned from `ack` + `arrived`: an input made for tick t should be applied at
+tick t − 1. The result screen waits for the server's phase 3. The server stays
+the only authority and has no rollback of its own: a late input is applied when
+it arrives. `?predict=0` turns prediction off (snapshots rendered `NET_DELAY`
+ticks behind, interpolated). The HUD flags RTT above 180 ms. `createArena({dev,
+latency})` (or `PULSE_DEV_LATENCY`) simulates a round trip in dev for tests.
 
 ## Combat and physics in v3
 

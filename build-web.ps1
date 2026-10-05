@@ -13,7 +13,7 @@ try {
     $ErrorActionPreference = 'Stop'
     $arenaDist = Join-Path $arenaRoot 'dist'
     New-Item -ItemType Directory -Force -Path $arenaDist | Out-Null
-    foreach ($file in @('index.html','gl.js','audio.js','pose.js','bridge.js','arena.js','arena.css','combat.js','scenery.js','sound.js')) {
+    foreach ($file in @('index.html','gl.js','audio.js','pose.js','bridge.js','arena.js','arena.css','combat.js','predict.js','scenery.js','sound.js')) {
         Copy-Item -LiteralPath (Join-Path $arenaRoot "web/$file") -Destination $arenaDist -Force
     }
     Copy-Item -LiteralPath (Join-Path $arenaRoot "target/wasm32-unknown-unknown/$profileName/some_game.wasm") -Destination $arenaDist -Force

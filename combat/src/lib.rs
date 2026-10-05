@@ -1006,6 +1006,33 @@ mod abi {
     thread_local! {
         static GAME: RefCell<Match> = RefCell::new(Match::default());
         static JSON: RefCell<String> = const { RefCell::new(String::new()) };
+        static INPUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    }
+    /// A buffer of `len` bytes for `arena_load` to read a state from.
+    #[no_mangle]
+    pub extern "C" fn arena_alloc(len: usize) -> *mut u8 {
+        INPUT.with(|b| {
+            let mut b = b.borrow_mut();
+            b.clear();
+            b.resize(len, 0);
+            b.as_mut_ptr()
+        })
+    }
+    /// Replaces the match with the JSON state in the `arena_alloc` buffer
+    /// (client prediction rolls back to each server snapshot). 1 on success.
+    #[no_mangle]
+    pub extern "C" fn arena_load(len: usize) -> u32 {
+        INPUT.with(|b| {
+            let b = b.borrow();
+            let state = std::str::from_utf8(&b[..len.min(b.len())]).ok().and_then(|s| Match::deserialize_json(s).ok());
+            match state {
+                Some(m) => {
+                    GAME.with(|g| *g.borrow_mut() = m);
+                    1
+                }
+                None => 0,
+            }
+        })
     }
     #[no_mangle]
     pub extern "C" fn arena_reset(seed: u32) {
@@ -1018,6 +1045,11 @@ mod abi {
     #[no_mangle]
     pub extern "C" fn arena_bot(side: u32) -> u32 {
         GAME.with(|g| g.borrow_mut().bot_input((side as usize).min(1)))
+    }
+    /// The simulation tick (cheap, without serialising the state).
+    #[no_mangle]
+    pub extern "C" fn arena_tick() -> u32 {
+        GAME.with(|g| g.borrow().tick)
     }
     #[no_mangle]
     pub extern "C" fn arena_forfeit(side: u32) {
@@ -1631,6 +1663,26 @@ mod tests {
         run(&mut heavy, [LIGHT, BLOCK], 11);
         run(&mut heavy, [HEAVY, BLOCK], 3);
         assert_eq!(heavy.fighters[0].action, 1);
+    }
+    #[test]
+    fn a_reloaded_snapshot_continues_exactly_like_the_original() {
+        // Client prediction reloads server snapshots and replays from them:
+        // the JSON round trip must keep every competitive field.
+        let mut a = Match::new(91);
+        for t in 0..20_000 {
+            let inputs = [a.bot_input(0), a.bot_input(1)];
+            if t % 97 == 0 {
+                let mut b = Match::deserialize_json(&a.serialize_json()).unwrap();
+                let mut c = a.clone();
+                for k in 0..120u32 {
+                    let i = [c.bot_input(0) ^ (k % 7), c.bot_input(1)];
+                    c.step(i);
+                    b.step(i);
+                }
+                assert_eq!(b.serialize_json(), c.serialize_json(), "diverged after reload at tick {t}");
+            }
+            a.step(inputs);
+        }
     }
     #[test]
     fn deterministic_long_match_and_serialization() {

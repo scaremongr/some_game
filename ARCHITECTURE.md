@@ -60,7 +60,7 @@ Principles:
 | `src/game/dance.rs`, `dancer.rs`, `mirror.rs`, `clips.rs`, `menu.rs`, `rhythm.rs` | Legacy dance game scenes (run natively with args `dance`, `mirror`, `clips`). `dancer.rs` also holds `Character` used by the fight. |
 | `src/bin/fightpack.rs` | Packs Mixamo clips into a fight pack, optionally retargeted onto a given fighter (`--character`). |
 | `src/bin/inspect.rs`, `beatmap.rs` | Model inspector; legacy dance tool. |
-| `web/` | `index.html` (all UI markup), `arena.js` (UI, input, WebSocket client, training loop, rating/leaderboard/card/revenge UI), `arena.css`, `bridge.js` (miniquad plugin: JS↔wasm imports), `gl.js` (**patched** miniquad loader), `combat.js` (loads `arena_combat.wasm` for Node and browser), `sound.js` (WebAudio: synthesised effects; music = recorded tracks `assets/sound/*.mp3` from `tools/music.py`, Kevin MacLeod CC BY 4.0 — credits in `CREDITS.md` and the help dialog — streamed by one `<audio>` element created in the first tap (iOS) through the mixer; modes all/sfx/off; the server answers byte ranges, which Safari needs for audio), `scenery.js` (decodes the city layers, draws the TV/laptop/canvas pictures on canvases → `window.arenaImages`), `audio.js`, `pose.js` (legacy). |
+| `web/` | `index.html` (all UI markup), `arena.js` (UI, input, WebSocket client, training loop, rating/leaderboard/card/revenge UI), `arena.css`, `bridge.js` (miniquad plugin: JS↔wasm imports), `gl.js` (**patched** miniquad loader), `combat.js` (loads `arena_combat.wasm` for Node and browser; `load()` restores a snapshot), `predict.js` (online prediction/rollback), `sound.js` (WebAudio: synthesised effects; music = recorded tracks `assets/sound/*.mp3` from `tools/music.py`, Kevin MacLeod CC BY 4.0 — credits in `CREDITS.md` and the help dialog — streamed by one `<audio>` element created in the first tap (iOS) through the mixer; modes all/sfx/off; the server answers byte ranges, which Safari needs for audio), `scenery.js` (decodes the city layers, draws the TV/laptop/canvas pictures on canvases → `window.arenaImages`), `audio.js`, `pose.js` (legacy). |
 | `server/` | `index.mjs` (HTTP + WS server, rooms, sessions, clock), `auth.mjs` (Telegram initData HMAC/Ed25519), `bot.mjs` (Telegram bot), `league.mjs` (ratings, leagues, chat tables, JSON persistence), `deploy-probe.mjs` (post-deploy check run inside the container), `*.test.mjs` (node:test). |
 | `scripts/` | Build/test/deploy helpers: browser tests (Playwright), `pose-sheet.mjs`, `fight-video.mjs`, `tile-frames.mjs`, `fighter-portraits.mjs`, `bot-art.mjs`, `publish.py` + `install-server.py` (deploy), `sshconf.py`, `server-inspect.py`. |
 | `tools/` | Asset pipelines: Mixamo download/convert/pack, fighters import, room build/bake (`tools/room/`), the night city (`tools/backdrop/city.py` → `assets/backdrop/far.jpg`, `near.png`), `fetch-assets.py`, `set-game-bot-token.py`. |
@@ -90,9 +90,17 @@ Principles:
   `fight_texture_cap` (phones: room textures above 1024 px halved on load). `fight_layout` passes four numbers: the free
   band top/bottom and left/right (the lobby frames the fighters beside the card).
 - **Smoothness**: rendering is at display rate; `arenaClock` gives a fractional
-  tick; online play renders `NET_DELAY = 3.5` ticks behind the newest snapshot
-  and interpolates. DPR is capped at 2 and lowered adaptively
-  (`window.arenaMaxDpr`, used by patched `gl.js`).
+  tick. DPR is capped at 2 and lowered adaptively (`window.arenaMaxDpr`, used by
+  patched `gl.js`).
+- **Online prediction** (`web/predict.js`, class `Prediction`, plain logic
+  shared with `server/netcode.test.mjs`): the page simulates ahead of the
+  server and renders its own predicted state like training; every snapshot
+  is a rollback point (`sim.load`), unapplied inputs are replayed, the
+  opponent holds their last input. The lead is tuned from the server's
+  `arrived` ticks (input made for tick t lands at t − 1). Diagnostics in
+  `window.arenaNetStats` (snapshots, corrections, lead, clock error).
+  `?predict=0` falls back to rendering `NET_DELAY = 3.5` ticks behind the
+  newest snapshot with interpolation (also used while the room is paused).
 - **Training**: `arena.js` steps `simulation()` at 60 Hz locally with
   `local.bot(1)` (or dummy/guard modes).
 - **Input**: bits (see PROTOCOL) from keyboard, floating joystick
@@ -280,8 +288,9 @@ python tools/fetch-assets.py                 # models + packs (not in git)
 .\build-web.ps1 -Serve                       # + local dev server on :8080 (guest identities)
 cargo test --offline --lib                   # engine/game: 65 tests
 cargo test --offline --manifest-path combat/Cargo.toml   # combat: 35 tests
-npm test                                     # server: 15 tests (node:test)
+npm test                                     # server: 18 tests (node:test), incl. netcode at 60/200 ms RTT
 npm run test:browser; npm run test:combat; npm run test:physics   # Playwright, need dist/
+npm run test:netcode                         # two pages online at 120 ms RTT, press-to-screen with/without prediction
 ```
 (`--offline` works once dependencies are in the cargo cache; drop it on a
 fresh machine.)
@@ -369,7 +378,8 @@ tools/backdrop/city.py -- --samples 256 --width 2560` (~1.5 min on an RTX 4090)
 writes `assets/backdrop/far.jpg` and `near.png`; our own procedural scene, so
 the images are in git. `BACKDROP_TAN_H/V` in `scenery.rs` must match the script.
 
-Open ideas: rollback netcode / input prediction (high ping is felt), daily
+Open ideas: server-side rollback of late inputs and visual smoothing of
+prediction corrections (client prediction is done), daily
 quests and streaks, tournaments, cosmetics for Telegram Stars (betting Stars on
 matches is not allowed by Telegram rules), post-processing (bloom, grading),
 fighter shadows on furniture, compression of `room.glb`, balance tuning with
