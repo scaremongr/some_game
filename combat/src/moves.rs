@@ -89,6 +89,86 @@ pub fn attack(action: u32) -> Option<Move> {
         knockdown,
     })
 }
+/// Fighting styles: the same moves tuned for a different plan (R14 in
+/// docs/COMBAT_RESEARCH.md). All-round: the base table. Pressure: closes in
+/// fast and wins up close (quicker jab, hook and low kick, a plus-ish cross,
+/// a longer throw, a short burst special) but its kicks are short. Range:
+/// holds the opponent at the end of its kicks (longer kicks and special,
+/// quicker retreat) but is slower up close.
+pub const ALLROUND: u32 = 0;
+pub const PRESSURE: u32 = 1;
+pub const RANGE: u32 = 2;
+
+/// `attack` as a fighter of `style` performs it.
+pub fn attack_for(style: u32, action: u32) -> Option<Move> {
+    let mut m = attack(action)?;
+    match (style, action) {
+        (PRESSURE, 1) => {
+            m.startup -= 1;
+            m.total -= 1;
+            m.damage += 1;
+        }
+        (PRESSURE, 11) => {
+            m.blockstun += 2;
+            m.damage += 1;
+        }
+        (PRESSURE, 16 | 17) => {
+            m.startup -= 1;
+            m.total -= 1;
+            m.damage += 1;
+        }
+        (PRESSURE, 4) => {
+            m.reach += 120;
+            m.damage += 2;
+        }
+        (PRESSURE, 8 | 12 | 18) => m.reach -= 40,
+        // A short, quick burst instead of the long push.
+        (PRESSURE, 14) => {
+            m.reach = 1650;
+            m.startup = 14;
+            m.total = 42;
+            m.push = 130;
+        }
+        (RANGE, 18) => m.reach += 80,
+        (RANGE, 12) => m.reach += 60,
+        // A long reach for the special: it covers half a room.
+        (RANGE, 14) => {
+            m.reach = 2450;
+            m.startup = 20;
+            m.total = 50;
+        }
+        (RANGE, 1 | 17) => {
+            m.startup += 1;
+            m.total += 1;
+        }
+        (RANGE, 11) => m.blockstun -= 1,
+        (RANGE, 4) => m.reach -= 100,
+        _ => {}
+    }
+    Some(m)
+}
+
+/// Walking speed of a style (mm/tick): forward, back.
+pub fn walk(style: u32) -> (i32, i32) {
+    match style {
+        PRESSURE => (30, 18),
+        RANGE => (21, 22),
+        _ => (24, 20),
+    }
+}
+
+/// The pressure style's forward dash can turn into an attack from this frame.
+pub const DASH_CANCEL: u32 = 8;
+
+/// Dash speed of a style (mm/tick over its first ten frames).
+pub fn dash(style: u32, forward: bool) -> i32 {
+    match (style, forward) {
+        (PRESSURE, true) => 96,
+        (RANGE, false) => 84,
+        _ => 72,
+    }
+}
+
 /// Follow-ups allowed once the attack has hit.
 pub fn cancel(action: u32, next: u32) -> bool {
     string(action, next)

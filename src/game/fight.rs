@@ -46,6 +46,8 @@ extern "C" {
     fn fight_avatars(mask: i32);
     /// The baked room: 1 shown, -1 unavailable (box room stays).
     fn fight_room_status(status: i32);
+    /// Debug flags from the page: 1 shows the hit, hurt and push boxes.
+    fn fight_flags() -> i32;
     /// Largest room texture side, 0 for no limit.
     fn fight_texture_cap() -> i32;
     /// The baked room to load (UTF-8 path; 0: the default).
@@ -309,15 +311,16 @@ impl FightScene {
             }
         }
         let victim = &self.fighters[target];
-        let heavy = moves::attack(e.attacker_action).is_some_and(|m| m.heavy());
-        let low = moves::attack(e.attacker_action).is_some_and(|m| m.height == moves::Height::Low);
+        let blow = moves::attack_for(self.fighters[1 - target].style, e.attacker_action);
+        let heavy = blow.is_some_and(|m| m.heavy());
+        let low = blow.is_some_and(|m| m.height == moves::Height::Low);
         let fallback = vec3(
             self.bodies[target].x + victim.facing as f32 * 0.18,
             self.bodies[target].y + if low { 0.3 } else { 1.3 },
             0.22,
         );
         self.impact = match &self.model {
-            Some(model) if moves::attack(e.attacker_action).is_some() => {
+            Some(model) if blow.is_some() => {
                 let limb = model.striker_world(1 - target, e.attacker_action);
                 let body_x = self.bodies[target].x + victim.facing as f32 * 0.12;
                 vec3(limb.x * 0.6 + body_x * 0.4, limb.y, limb.z.max(0.1))
@@ -376,7 +379,7 @@ impl FightScene {
         let (target, other) = (e.target, 1 - e.target);
         // From the attacker towards the struck body.
         let away = if self.bodies[target].x >= self.bodies[other].x { 1.0 } else { -1.0 };
-        let m = moves::attack(e.attacker_action);
+        let m = moves::attack_for(self.fighters[other].style, e.attacker_action);
         let heavy = m.is_some_and(|m| m.heavy());
         match e.kind {
             2 => model.push(target, Part::Guard, vec3(away, 0.15, 0.0), if heavy { 2.4 } else { 1.5 }),
@@ -402,6 +405,39 @@ impl FightScene {
                 };
                 let speed = if heavy { 3.4 } else { 2.0 } * if e.kind == 6 { 1.3 } else { 1.0 };
                 model.push(target, part, dir, speed);
+            }
+        }
+    }
+
+    /// Training overlay: each fighter's boxes as the simulation sees them
+    /// (combat/src/boxes.rs) at the shown position — body green, stretched
+    /// limb yellow, active blow red, pushbox grey.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    fn draw_boxes(&self, g: &mut Graphics, camera: &Camera, c: Vec2) {
+        use arena_combat::boxes;
+        for side in 0..2 {
+            let mut f = self.fighters[side].clone();
+            f.x = (self.bodies[side].x * 1000.0).round() as i32;
+            f.y = (self.bodies[side].y * 1000.0).round() as i32;
+            f.frame = self.bodies[side].frame.floor().max(0.0) as u32;
+            let m = f.attack();
+            let [body, limb] = boxes::hurtboxes(&f, m.as_ref());
+            let hit = m.as_ref().and_then(|m| boxes::hitbox(&f, m));
+            let shapes = [
+                (Some(boxes::pushbox(&f)), Color::hex(0x9AA4AE), 1.0, 0.012),
+                (body, Color::hex(0x5BF08A), 2.0, 0.0),
+                (limb, Color::hex(0xFFD24A), 2.0, 0.0),
+                (hit, Color::hex(0xFF4A4A), 3.0, -0.012),
+            ];
+            for (rect, color, width, inset) in shapes {
+                let Some(r) = rect else { continue };
+                let (x0, x1) = (r.x0 as f32 / 1000.0 + inset, r.x1 as f32 / 1000.0 - inset);
+                let (y0, y1) = (r.y0 as f32 / 1000.0 + inset, r.y1 as f32 / 1000.0 - inset);
+                let corners = [vec3(x0, y0, 0.0), vec3(x1, y0, 0.0), vec3(x1, y1, 0.0), vec3(x0, y1, 0.0)];
+                for k in 0..4 {
+                    let (a, b) = (camera.project(corners[k], c), camera.project(corners[(k + 1) % 4], c));
+                    g.line(a, b, width, color.with_alpha(0.9));
+                }
             }
         }
     }
@@ -475,7 +511,7 @@ impl FightScene {
                 if action == 3 && last_action != 3 {
                     self.effects.dust(vec3(x, 0.0, 0.0), 6, 0.6);
                 }
-                if let Some(m) = moves::attack(action) {
+                if let Some(m) = f.attack() {
                     let hit = m.startup as f32;
                     let crossed = action == last_action && last_frame < hit && frame >= hit
                         || action != last_action && frame >= hit && frame < hit + 2.0;
@@ -529,7 +565,7 @@ impl FightScene {
             for side in 0..2 {
                 let f = &visual[side];
                 let frame = self.bodies[side].frame;
-                let active = moves::attack(f.action).is_some_and(|m| {
+                let active = f.attack().is_some_and(|m| {
                     frame + 3.0 >= m.startup as f32 && frame < (m.startup + m.active + 3) as f32
                 });
                 if active && !preview {
@@ -1025,6 +1061,10 @@ impl Scene for FightScene {
             }
         }
         self.effects.draw(g, &camera, c);
+        #[cfg(target_arch = "wasm32")]
+        if unsafe { fight_flags() } & 1 != 0 {
+            self.draw_boxes(g, &camera, c);
+        }
         if self.flash > 0.0 {
             let p = camera.project(self.impact, c);
             let col = match self.impact_kind {

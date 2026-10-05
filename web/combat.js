@@ -8,6 +8,8 @@ export function simulation(module, seed = 1) {
     bot(side) { return api.arena_bot(side); },
     forfeit(side) { api.arena_forfeit(side); },
     tick() { return api.arena_tick(); },
+    // Fighting style of a side: 0 all-round, 1 pressure, 2 range.
+    style(side, style) { api.arena_style(side, style); },
     // Replaces the match with a snapshot (client prediction rolls back to it).
     load(state) {
       const bytes = new TextEncoder().encode(typeof state === 'string' ? state : JSON.stringify(state));

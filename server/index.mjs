@@ -14,13 +14,17 @@ const token = () => randomBytes(24).toString('base64url');
 // Identities of the post-deploy check (server/deploy-probe.mjs): never rated.
 const PROBES = new Set(['800000000001', '800000000002']);
 const DEFAULT_FIGHTER = 'medea';
-// Fighter ids a client may pick: assets/fighters/roster.json shipped with the client.
+// Fighting styles (combat/src/moves.rs): each fighter's style in roster.json.
+const STYLES = { allround: 0, pressure: 1, range: 2 };
+// Fighter ids a client may pick (assets/fighters/roster.json, shipped with the
+// client) and the style each fights in.
 async function loadRoster() {
+  const fighters = new Map([[DEFAULT_FIGHTER, 0]]);
   try {
     const roster = JSON.parse(await readFile(resolve(root, 'assets/fighters/roster.json'), 'utf8'));
-    const ids = roster.map(f => f?.id).filter(id => typeof id === 'string' && /^[a-z0-9_-]{1,24}$/.test(id));
-    return new Set([DEFAULT_FIGHTER, ...ids]);
-  } catch { return new Set([DEFAULT_FIGHTER]); }
+    for (const f of roster) if (typeof f?.id === 'string' && /^[a-z0-9_-]{1,24}$/.test(f.id)) fighters.set(f.id, STYLES[f.style] ?? 0);
+  } catch {}
+  return fighters;
 }
 export async function createArena(options = {}) {
   const dev = options.dev ?? false;
@@ -237,6 +241,7 @@ export async function createArena(options = {}) {
   }
   function start(room) {
     room.sim=simulation(module,randomInt(1,0x7fffffff)); room.rematch=new Set();room.paused=false; room.updated=Date.now(); room.recorded=false;
+    room.players.forEach((s,side)=>room.sim.style(side,fighters.get(s.fighter)??0));
     room.players.forEach((s,side)=>{s.input=0;s.pending=0;send(s,{type:'match',code:room.code,side,players:room.players.map(publicPlayer)});});
     snapshot(room);
   }

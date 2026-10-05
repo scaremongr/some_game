@@ -1116,7 +1116,7 @@ impl FighterModel {
             // foot lifts and plants before contact (and steps back during the
             // recovery); the other foot stays planted, so nothing skates.
             let mut pop = 0.0;
-            if let (Clip::Attack(action), Some(m)) = (clip, moves::attack(f.action)) {
+            if let (Clip::Attack(action), Some(m)) = (clip, f.attack()) {
                 let hit = m.startup as f32;
                 let active = hit + m.active as f32;
                 let end = m.total as f32;
@@ -1213,7 +1213,7 @@ impl FighterModel {
                     let take = &captured.takes[key];
                     let (t, travel) = match clip {
                         Clip::Attack(action) => {
-                            let m = moves::attack(action).unwrap();
+                            let m = moves::attack_for(f.style, action).unwrap();
                             let hit = m.startup as f32;
                             let open = (m.startup + m.active) as f32;
                             let t = if action == 4 && !f.connected && frame > open {
@@ -1319,7 +1319,7 @@ impl FighterModel {
                     (_, Travel::InPlace | Travel::Air(_) | Travel::Sway) => 0.0,
                     (_, Travel::Keep) => 1.0,
                     (Clip::Attack(action), Travel::Return) => {
-                        let m = moves::attack(action);
+                        let m = moves::attack_for(f.style, action);
                         let depth = match m.map(|m| m.height) {
                             Some(moves::Height::Low) => 0.30,
                             _ => 0.16,
@@ -1352,7 +1352,7 @@ impl FighterModel {
                 // The rising uppercut is captured on the spot: when it will
                 // connect, the body rises into the opponent over the startup
                 // and settles back in the recovery. Other strikes stay put.
-                if let (Clip::Attack(10), Travel::Return, Some(m)) = (clip, travel, moves::attack(10)) {
+                if let (Clip::Attack(10), Travel::Return, Some(m)) = (clip, travel, moves::attack_for(f.style, 10)) {
                     let distance = (bodies[1 - side].x - x).abs();
                     if distance * 1000.0 <= m.reach as f32 + 100.0 {
                         let short = (distance - 0.16 - take.reach - take.lunge.max(0.0)).clamp(0.0, 0.3);
@@ -1450,7 +1450,7 @@ impl FighterModel {
                 // the crouch clip and straighten by the hit, the punch itself
                 // comes from the uppercut clip.
                 if let (Clip::Attack(10), Some(low)) = (clip, captured.takes.get("crouch")) {
-                    let hit = moves::attack(10).map_or(13.0, |m| m.startup as f32);
+                    let hit = moves::attack_for(f.style, 10).map_or(13.0, |m| m.startup as f32);
                     let u = (frame / hit).clamp(0.0, 1.0);
                     let w = 1.0 - u * u * (3.0 - 2.0 * u);
                     if w > 0.01 {

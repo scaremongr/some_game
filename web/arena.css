@@ -76,6 +76,12 @@ h1 em{font-style:normal;color:var(--cyan)}
 .strip-arrow.prev{left:0}
 .strip-arrow[hidden]{display:none}
 .fighter-strip::-webkit-scrollbar{display:none}
+.fighter-strip .fighter small.style{font-size:9px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;opacity:.8}
+.fighter-strip .fighter small.style.pressure{color:#ff9d7a}
+.fighter-strip .fighter small.style.range{color:#8fc8ff}
+.fighter-strip .fighter small.style.allround{color:#8bffe3}
+.fighter-plan{margin:2px 4px 8px;font-size:11px;line-height:1.35;color:var(--muted);min-height:2.7em}
+#show-zones.on{border-color:var(--cyan);color:var(--cyan)}
 .fighter{flex:0 0 70px;height:90px;padding:0;position:relative;overflow:hidden;border-radius:8px;border:1px solid #8cb0b333;background:#0f1d29;scroll-snap-align:start;cursor:pointer}
 .fighter img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.72;transition:opacity .15s}
 .fighter span{position:absolute;left:0;right:0;bottom:0;padding:14px 2px 4px;font-size:9px;font-weight:700;letter-spacing:0;text-transform:uppercase;text-align:center;color:#e9fbff;background:linear-gradient(transparent,#07101acc);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

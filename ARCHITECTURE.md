@@ -46,7 +46,7 @@ Principles:
 
 | Path | What |
 |---|---|
-| `combat/` | Crate `arena-combat` (lib + cdylib). `lib.rs` — `Match`, `Fighter`, `step()`, hit resolution, physics, walls, room damage, throws (`held`), settle after rounds, bot AI, wasm exports `arena_reset/step/bot/forfeit/state/state_len`; `moves.rs` — frame data table + cancel rules; `room.rs` — 20 stable room object IDs (0–4 fixed exterior, 5–19 breakable). |
+| `combat/` | Crate `arena-combat` (lib + cdylib). `lib.rs` — `Match`, `Fighter`, `step()`, hit resolution, physics, walls, room damage, throws (`held`), settle after rounds, bot AI, wasm exports `arena_reset/step/bot/forfeit/state/state_len/alloc/load/tick/style`; `moves.rs` — frame data table, cancel rules, fighting styles (`attack_for`, `walk`, `dash`); `boxes.rs` — hit, hurt and push boxes; `room.rs` — 20 stable room object IDs (0–4 fixed exterior, 5–19 breakable). |
 | `src/engine/` | Engine (from an earlier "dance" game, kept): `app.rs` scene loop on miniquad; `graphics.rs` 2D sprite batch + wrappers for 3D (`draw_skinned`, `draw_baked`, `upload_*`); `render3d.rs` pipelines & GLSL (lit skinned, double-sided, mirrored, planar stencil shadow, baked-unlit, glass); `gltf.rs` GLB loader (skin, skeleton reduction to 72 bones, clip retargeting by bone name, `load_scene` per node); `skeleton.rs` (`MAX_BONES = 72`); `physics.rs` (`Fragment` debris); `math3.rs`, `mesh3.rs`, `assets.rs`, `audio.rs`, … |
 | `src/game/fight.rs` | `FightScene`: reads state JSON from the page each frame, timeline interpolation, events, camera band, effects, fighters, room; loads fighters by path (`window.arenaFighters`), the baked room, fight packs. |
 | `src/game/fighter_model.rs` | `FighterModel` + `Avatar` (per body: character, rig, bones, captured clips). Picks a `Clip` from `Fighter` state, maps it to a captured take (`take_for`), warps time with marks, root motion (`Travel`), layers (walk blend, crouch upper body, uppercut rising from crouch, recoil lean, fists), bone-space cross-fades, mirroring of the right fighter. Tests pose every state. |
@@ -83,7 +83,8 @@ Principles:
   optional clip index/time for clip review), `fight_clock` (continuous render
   tick from `window.arenaClock`), `fight_layout` (free screen band),
   `fight_fighters` (model/pack per side from `window.arenaFighters`),
-  `fight_avatars` (which sides show the requested body), `fight_room_status`,
+  `fight_avatars` (which sides show the requested body), `fight_flags` (1:
+  draw the hit/hurt/push boxes, `window.arenaShowBoxes`, training «Зоны»), `fight_room_status`,
   `fight_image_info`/`fight_image_copy` (page pictures for `scenery.rs`: version,
   size, RGBA pixels per slot; slot 6 is the room detail atlas),
   `fight_room_url` (desktops load `assets/room-hd.glb`, phones `assets/room.glb`),
@@ -202,6 +203,16 @@ Principles:
   14 special, 15 knockdown, 16 low kick, 17 hook, 18 side kick, 19 room
   smash. Crouch + J/U/K = low kick / sweep / uppercut; a repeated button
   continues its string even on a whiff (J-J-J, U-U; `moves::string`).
+- Contact (R12, `boxes.rs`): a blow's hitbox against the defender's body or
+  stretched limb (a whiff can be hit on the leg; a crouch ducks the jab, a
+  jump clears lows); the guard is still chosen by the height class. Training
+  draws the boxes (`FightScene::draw_boxes`).
+- Styles (R14, COMBAT_RESEARCH.md §18.9): `Fighter.style`, `Match.styles`
+  (kept across rounds, `set_style`); all-round = base table; pressure: faster
+  walk and a longer forward dash that cancels into attacks, quicker jab/hook/
+  low kick, plus-ish cross, longer throw, shorter kicks; range: longer side
+  kick/roundhouse/special, faster retreat and back dash, slower up close. The
+  bot keeps its style's distances. Renderer timing uses the fighter's style.
 - Defence rules (2026-10-05 iteration, see COMBAT_RESEARCH.md §18): parry only
   for a fresh guard (`PARRY`, `PARRY_COOLDOWN`); light strings continue on
   block (`moves::block_cancel`); no throws on a blocking victim; throw tech
@@ -286,7 +297,8 @@ Principles:
   where to get them and how to add them: §12.
 - Legacy dance assets (`assets/moves`, `assets/music`, `character_old.glb`,
   `character_not_rigged.glb`) are not in git and not used by the fight.
-- Roster: `assets/fighters/roster.json` (`id, name, model, pack, portrait`);
+- Roster: `assets/fighters/roster.json` (`id, name, model, pack, portrait,
+  style`; style `allround|pressure|range`, shown on the lobby card with a plan);
   the server accepts only these ids. Add a fighter: FBX in
   `assets-src/fighters/fbx` → `.\tools\import-fighters.ps1 -Only <id>` → roster
   entry → `.\build-web.ps1` → `node scripts/fighter-portraits.mjs <id>`.
@@ -306,9 +318,9 @@ npm ci
 python tools/fetch-assets.py                 # models + packs (not in git)
 .\build-web.ps1                              # -> dist/ (both wasm + web + assets)
 .\build-web.ps1 -Serve                       # + local dev server on :8080 (guest identities)
-cargo test --offline --lib                   # engine/game: 65 tests
-cargo test --offline --manifest-path combat/Cargo.toml   # combat: 35 tests
-npm test                                     # server: 18 tests (node:test), incl. netcode at 60/200 ms RTT
+cargo test --offline --lib                   # engine/game: 67 tests
+cargo test --offline --manifest-path combat/Cargo.toml   # combat: 40 tests (incl. a 3x3 style matchup run)
+npm test                                     # server: 19 tests (node:test), incl. netcode at 60/200 ms RTT
 npm run test:browser; npm run test:combat; npm run test:physics   # Playwright, need dist/
 npm run test:netcode                         # two pages online at 120 ms RTT, press-to-screen with/without prediction
 ```

@@ -21,8 +21,10 @@ message, never the URL. Unauthenticated connections expire after 5 seconds.
 | `leave` | — | Cancel queue / leave room / concede active match |
 
 `fighter` is an id from `assets/fighters/roster.json` (shipped with the client,
-read by the server at start). It only picks the body both clients draw; every
-fighter uses the same combat rules. Unknown ids keep the previous choice
+read by the server at start). It picks the body both clients draw and the
+fighting style (`style`: `allround`, `pressure` or `range`; the server calls
+`arena_style(side, 0|1|2)` when the match starts, and the state carries
+`fighters[i].style` and `styles`). Unknown ids keep the previous choice
 (default `medea`).
 
 `bits`: left=1, right=2, block=4, jab=8, heavy=16, dash=32, grab=64,
@@ -76,6 +78,15 @@ live in `DATA_DIR` (`/app/data`, a host volume in production).
 The server runs the same isolated Rust/WASM module as browser training at 60 Hz.
 It accepts inputs only; position, HP, stamina, damage, time and wins sent by
 clients have no authority. Hits resolve from both pre-hit states, allowing trades.
+A blow connects when its hitbox overlaps a hurtbox of the defender
+(`combat/src/boxes.rs`): the body (1750 mm tall, 1100 crouching or sweeping or
+rising into the uppercut, lifted with a jump; 500 mm wide) or the limb the
+defender is striking with, from two frames before its active frames until
+halfway through the recovery, drawing back meanwhile. Grabs only take the
+body. Blow height bands above the striker's feet: jab 1250–1650, cross/hook
+950–1550, kicks 800–1300, roundhouse 950–1700, overhead 1050–1700, sweep
+0–280, low kick 100–500, uppercut 800–2400, air kick −150–700. Which guard
+stops a blow is its height class, as before.
 A 12-tick input buffer captures presses during hitstop. Early attack cancels
 require a confirmed hit and an allowed transition in `combat/src/moves.rs`
 (`cancel`); light strings may also continue after a block (`block_cancel`).
@@ -98,7 +109,10 @@ in `combat/src/moves.rs` and also drives animation timing. Action IDs:
 0 idle, 1 jab, 2 overhead, 3 dash, 4 throw, 5 hitstun, 8 kick, 9 sweep,
 10 uppercut, 11 cross, 12 roundhouse, 13 air kick, 14 special, 15 knockdown,
 16 low kick (crouch + jab), 17 hook (third jab of J-J-J), 18 side kick (second
-kick of U-U), 19 room smash. IDs 6 and 7 are unused.
+kick of U-U), 19 room smash. IDs 6 and 7 are unused. Frame data per style:
+`moves::attack_for(style, action)`; walking `moves::walk`, dashing
+`moves::dash` (the pressure style's forward dash turns into an attack from
+frame 8).
 
 Fighters add `crouch`, `meter` (0..1000), `blockstun`, `down`, `invulnerable`,
 `juggle`, `combo_damage`, `confirmed`, `prop_hit`, `air_attack`, `held` (ticks

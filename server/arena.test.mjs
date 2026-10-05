@@ -16,6 +16,19 @@ async function client(url,resume) {
   const welcome=await wait('welcome');
   return {ws,send,wait,messages,key:welcome.resume};
 }
+test('each fighter fights in its roster style (all-round, pressure, range)', {timeout:15000}, async()=>{
+  const app=await createArena({dev:true});app.server.listen(0,'127.0.0.1');await new Promise(r=>app.server.once('listening',r));
+  try {
+    const url=`ws://127.0.0.1:${app.server.address().port}/ws`;
+    const a=await client(url),b=await client(url);
+    a.send({type:'queue',fighter:'ninja'});await a.wait('queued');b.send({type:'queue',fighter:'eve'});
+    const ma=await a.wait('match');
+    const st=await a.wait('state');
+    const styles=st.state.fighters.map(f=>f.style), expected=ma.side===0?[1,2]:[2,1];
+    assert.deepEqual(styles,expected);assert.deepEqual(st.state.styles,expected);
+    a.ws.close();b.ws.close();
+  } finally {await app.close();}
+});
 test('two clients: matchmaking, authoritative hits, sequence validation, resume, forfeit', {timeout:15000}, async()=>{
   const app=await createArena({dev:true});app.server.listen(0,'127.0.0.1');await new Promise(r=>app.server.once('listening',r));
   const base=`http://127.0.0.1:${app.server.address().port}`,url=base.replace('http','ws')+'/ws';

@@ -1,8 +1,9 @@
 //! Authoritative, fixed 60 Hz combat. No clock, graphics, network or random IO.
 use nanoserde::{DeJson, SerJson};
+pub mod boxes;
 pub mod moves;
 pub mod room;
-use moves::{attack, Height};
+use moves::{attack, Height, Move};
 
 pub const LEFT: u32 = 1;
 pub const RIGHT: u32 = 2;
@@ -22,9 +23,8 @@ pub const EDGE_MASK: u32 = LIGHT | HEAVY | DASH | THROW | KICK | JUMP | SPECIAL 
 pub const KNOCKDOWN: u32 = 56;
 /// A guard raised this many ticks before the blow parries it.
 pub const PARRY: u32 = 6;
-/// Walking speed (mm/tick): 1.44 m/s forward, 1.2 m/s back, 0.72 m/s
-/// guarded or crouched. The captured walk plays by distance with longer
-/// strides at speed (fighter_model.rs), so the feet stay planted.
+/// Walking speed of the all-round style (mm/tick): 1.44 m/s forward, 1.2 m/s
+/// back (other styles: `moves::walk`); 0.72 m/s guarded or crouched for all.
 pub const WALK_FORWARD: i32 = 24;
 pub const WALK_BACK: i32 = 20;
 pub const WALK_SLOW: i32 = 12;
@@ -78,6 +78,9 @@ pub struct Fighter {
     /// Ticks until a raised guard gets its parry window again.
     #[nserde(default)]
     pub parry_cooldown: u32,
+    /// Fighting style (`moves::ALLROUND`, `PRESSURE`, `RANGE`).
+    #[nserde(default)]
+    pub style: u32,
 }
 /// A throw holds its victim this long, from the grab to the slam.
 pub const HOLD: u32 = 32;
@@ -124,7 +127,16 @@ impl Fighter {
             air_attack: false,
             held: 0,
             parry_cooldown: 0,
+            style: 0,
         }
+    }
+    /// The attack this fighter is performing, with its style's frame data.
+    pub fn attack(&self) -> Option<Move> {
+        moves::attack_for(self.style, self.action)
+    }
+    /// Ticks `action` lasts for this fighter.
+    pub fn duration(&self, action: u32) -> u32 {
+        moves::attack_for(self.style, action).map_or(if action == 3 { 24 } else { 0 }, |m| m.total)
     }
 }
 #[derive(Clone, Debug, SerJson, DeJson)]
@@ -164,6 +176,9 @@ pub struct Match {
     pub event_kind: u32,
     pub event_target: usize,
     pub seed: u32,
+    /// Each side's fighting style, kept across rounds.
+    #[nserde(default)]
+    pub styles: [u32; 2],
 }
 impl Default for Match {
     fn default() -> Self {
@@ -188,6 +203,14 @@ impl Match {
             event_kind: 0,
             event_target: 0,
             seed: seed.max(1),
+            styles: [0, 0],
+        }
+    }
+    /// Sets a side's fighting style (from its fighter, roster.json).
+    pub fn set_style(&mut self, side: usize, style: u32) {
+        if side < 2 {
+            self.styles[side] = style.min(moves::RANGE);
+            self.fighters[side].style = self.styles[side];
         }
     }
     pub fn forfeit(&mut self, loser: usize) {
@@ -207,6 +230,12 @@ impl Match {
         let away = if side == 0 { LEFT } else { RIGHT };
         let enemy = self.fighters[1 - side].clone();
         let me = self.fighters[side].clone();
+        // Range pokes from further out; pressure pokes like the all-round
+        // style but dashes in instead some of the time.
+        let (poke, far) = match me.style {
+            moves::RANGE => (1450, 1800),
+            _ => (1350, 1700),
+        };
         let salt = self.round.wrapping_mul(7919) ^ (side as u32).wrapping_mul(104_729) ^ self.seed;
         let roll = |key: u32| mix(key ^ salt) % 100;
         // Grabbed: breaks the throw about one time in four.
@@ -230,7 +259,7 @@ impl Match {
         // ender varies (hook, roundhouse, uppercut; side kick).
         let string = me.confirmed || roll(self.tick / 8 ^ 0x51) < if me.connected { 45 } else { 25 };
         let tap = |bits: u32| if me.previous & bits == 0 { bits } else { 0 };
-        if string && attack(me.action).is_some_and(|m| me.frame >= m.startup + 2) {
+        if string && me.attack().is_some_and(|m| me.frame >= m.startup + 2) {
             let ender = roll(self.tick.wrapping_sub(me.frame) ^ 0xE7);
             match me.action {
                 1 => return tap(LIGHT),
@@ -246,6 +275,15 @@ impl Match {
         if me.y > 200 && distance < 1500 {
             return KICK;
         }
+        // Pressure: a dash in ends in a jab, a low kick or a grab.
+        if me.action == 3 && me.dash_dir == me.facing && me.frame >= moves::DASH_CANCEL && distance < 1150 {
+            return match roll(self.tick.wrapping_sub(me.frame) ^ 0xDA) {
+                0..=44 => LIGHT,
+                45..=69 => CROUCH | LIGHT,
+                _ if distance < 1000 => THROW,
+                _ => LIGHT,
+            };
+        }
         let window = (self.tick + side as u32 * 7) / 15;
         // A jump coming in: an uppercut now and then, otherwise a guard.
         if enemy.y > 300 && me.y == 0 && distance < 1500 {
@@ -256,7 +294,7 @@ impl Match {
                 return BLOCK;
             }
         }
-        if let Some(m) = attack(enemy.action) {
+        if let Some(m) = enemy.attack() {
             // Human reaction: seen for 12 ticks, still 7 left (a plain block,
             // never a parry); about half of them, a quarter at the wrong height.
             let seen = enemy.frame >= 12 && enemy.frame + PARRY < m.startup;
@@ -265,10 +303,19 @@ impl Match {
                 let low = (m.height == Height::Low) != (roll(key ^ 0x5EED) < 25);
                 return BLOCK | if low { CROUCH } else { 0 };
             }
-            // A slow attack whiffed or blocked close by: punish it.
+            // A slow attack whiffed or blocked: punish it — a jab close by, a
+            // kick into the stretched limb or the body further out, or a dash
+            // in (pressure).
             let recovering = enemy.frame >= m.startup + m.active && m.total - enemy.frame >= 10;
-            if recovering && distance < 1200 && roll(key ^ 0xBEEF) < 45 {
-                return if me.previous & LIGHT == 0 { LIGHT } else { 0 };
+            if recovering && roll(key ^ 0xBEEF) < 45 {
+                let kick = moves::attack_for(me.style, 8).map_or(0, |k| k.reach);
+                if distance < 1200 {
+                    return if me.previous & LIGHT == 0 { LIGHT } else { 0 };
+                } else if distance < kick + m.reach / 3 {
+                    return if me.previous & KICK == 0 { KICK } else { 0 };
+                } else if me.style == moves::PRESSURE && distance < 2200 {
+                    return DASH | toward;
+                }
             }
         }
         if me.stamina < 200 {
@@ -276,10 +323,11 @@ impl Match {
         }
         let plan = roll(window);
         let opening = (self.tick + side as u32 * 7) % 15 == 0;
-        if distance > 1700 {
+        if distance > far {
             return match plan {
                 0..=74 => toward,
-                75..=84 if opening && distance < 2300 => JUMP | toward,
+                75..=84 if opening && distance < far + 600 => JUMP | toward,
+                85..=89 if opening && me.style == moves::PRESSURE => DASH | toward,
                 _ => 0,
             };
         }
@@ -289,7 +337,16 @@ impl Match {
                     return 0;
                 }
                 let pick = roll(window ^ 0x77);
-                if distance > 1350 {
+                if distance > poke && me.style == moves::PRESSURE {
+                    // Pressure dashes in some of the time instead of poking.
+                    match pick {
+                        0..=24 => DASH | toward,
+                        25..=54 => KICK,
+                        55..=69 => HEAVY,
+                        70..=79 if me.meter >= 500 => SPECIAL,
+                        _ => toward,
+                    }
+                } else if distance > poke {
                     match pick {
                         0..=44 => KICK,
                         45..=64 => HEAVY,
@@ -383,6 +440,9 @@ impl Match {
                     self.round += 1;
                     let center = room::ROUND_CENTERS[(self.round as usize - 1) % room::ROUND_CENTERS.len()];
                     self.fighters = [Fighter::new(center - 1150, 1), Fighter::new(center + 1150, -1)];
+                    for side in 0..2 {
+                        self.fighters[side].style = self.styles[side];
+                    }
                     self.walls = [Wall::default(), Wall::default()];
                     self.objects = room::fresh();
                     self.remaining = 3600;
@@ -511,11 +571,11 @@ impl Match {
             if f.action != 0 {
                 f.frame += 1;
                 if f.action == 3 && f.frame < 11 {
-                    f.x += f.dash_dir * 72;
+                    f.x += f.dash_dir * moves::dash(f.style, f.dash_dir == f.facing);
                 }
                 // Combos continue on hit, light strings also on block, and a
                 // repeated button continues its string even on a whiff.
-                let cancel = attack(f.action).is_some_and(|m| {
+                let cancel = f.attack().is_some_and(|m| {
                     if f.confirmed {
                         f.frame >= m.startup + 2 && moves::cancel(f.action, candidate)
                     } else if f.connected {
@@ -524,7 +584,13 @@ impl Match {
                         f.frame >= m.startup + m.active && moves::string(f.action, candidate)
                     }
                 });
-                if cancel || f.frame >= duration(f.action) {
+                // Pressure: the forward dash turns into an attack (or a grab).
+                let dash_in = f.action == 3
+                    && f.style == moves::PRESSURE
+                    && f.dash_dir == f.facing
+                    && f.frame >= moves::DASH_CANCEL
+                    && !matches!(candidate, 0 | 3);
+                if cancel || dash_in || f.frame >= f.duration(f.action) {
                     f.action = 0;
                     f.frame = 0;
                 }
@@ -548,15 +614,16 @@ impl Match {
             if f.action == 0 {
                 let movement = i32::from(input & RIGHT != 0) - i32::from(input & LEFT != 0);
                 if f.y == 0 {
-                    // Walking: forward a little faster than back, guarded or
-                    // crouched slowly; the dash covers distance.
+                    // Walking at the style's pace, guarded or crouched slowly;
+                    // the dash covers distance.
+                    let (forward, back) = moves::walk(f.style);
                     f.x += movement
                         * if f.guard || f.crouch {
                             WALK_SLOW
                         } else if movement == f.facing {
-                            WALK_FORWARD
+                            forward
                         } else {
-                            WALK_BACK
+                            back
                         };
                 }
                 if buffered & JUMP != 0 && f.y == 0 {
@@ -568,7 +635,7 @@ impl Match {
                     f.air_attack = false;
                     f.buffer_time = 0;
                 } else if candidate != 0 {
-                    let cost = attack(candidate).map_or(160, |m| m.cost);
+                    let cost = moves::attack_for(f.style, candidate).map_or(160, |m| m.cost);
                     if f.stamina >= cost
                         && (candidate != 14 || f.meter >= 500)
                         && (f.y == 0 || (candidate == 13 && !f.air_attack))
@@ -614,8 +681,8 @@ impl Match {
         }
         if let Some(victim) = slam {
             // The throw's damage lands with the body.
-            let dealt = attack(4).map_or(0, |m| m.damage);
             let thrower = &mut self.fighters[1 - victim];
+            let dealt = moves::attack_for(thrower.style, 4).map_or(0, |m| m.damage);
             thrower.meter = (thrower.meter + dealt * 6).min(1000);
             thrower.combo_damage = dealt;
             let f = &mut self.fighters[victim];
@@ -626,14 +693,13 @@ impl Match {
             self.event_target = victim;
             self.freeze = 4;
         }
-        // Fighters cannot cross; facing and control direction stay predictable on phones.
-        if self.fighters[1].x - self.fighters[0].x < 600 {
-            let mid = ((self.fighters[0].x + self.fighters[1].x) / 2).clamp(
-                -ARENA_LIMIT + 300,
-                ARENA_LIMIT - 300,
-            );
-            self.fighters[0].x = mid - 300;
-            self.fighters[1].x = mid + 300;
+        // Pushboxes: fighters cannot cross; facing and control direction stay
+        // predictable on phones.
+        let push = boxes::PUSH_HALF;
+        if self.fighters[1].x - self.fighters[0].x < 2 * push {
+            let mid = ((self.fighters[0].x + self.fighters[1].x) / 2).clamp(-ARENA_LIMIT + push, ARENA_LIMIT - push);
+            self.fighters[0].x = mid - push;
+            self.fighters[1].x = mid + push;
         }
         // Resolve both intents from the same pre-hit state: simultaneous hits trade.
         let before = self.fighters.clone();
@@ -641,10 +707,8 @@ impl Match {
         for side in 0..2 {
             let a = &before[side];
             let d = &before[1 - side];
-            let Some(m) = attack(a.action) else { continue };
-            if a.frame < m.startup || a.frame >= m.startup + m.active {
-                continue;
-            }
+            let Some(m) = a.attack() else { continue };
+            let Some(hit) = boxes::hitbox(a, &m) else { continue };
             if !a.prop_hit {
                 self.damage_room(
                     if a.action == 19 {
@@ -673,24 +737,22 @@ impl Match {
             // Only the back dash slips through attacks; the forward dash is
             // a committed approach.
             let backdash = d.action == 3 && d.dash_dir != d.facing && (2..=8).contains(&d.frame);
-            if a.connected
-                || clash
-                || d.invulnerable > 0
-                || d.down > 0
-                || d.juggle >= 4
-                || (a.x - d.x).abs() > m.reach
-                || backdash
-            {
+            if a.connected || clash || d.invulnerable > 0 || d.down > 0 || d.juggle >= 4 || backdash {
                 continue;
             }
-            // The rising uppercut is out of reach of high and air attacks.
-            let rising = d.action == 10 && attack(10).is_some_and(|u| d.frame >= 1 && d.frame < u.startup + u.active);
-            if (m.height == Height::High && d.crouch && !d.guard)
-                || (m.height == Height::Low && d.y > 160)
+            // Contact: the blow's box meets the body (a grab) or the body or a
+            // stretched limb (a strike). A crouching body ducks under a jab, a
+            // jump clears a sweep, a whiffed kick can be hit on the leg.
+            let d_move = d.attack();
+            let hurt = boxes::hurtboxes(d, d_move.as_ref());
+            let grab = m.height == Height::Grab;
+            let touches = hurt.iter().take(if grab { 1 } else { 2 }).flatten().any(|b| hit.overlaps(b));
+            // The rising uppercut also slips air attacks.
+            let rising = d.action == 10 && d_move.is_some_and(|u| d.frame >= 1 && d.frame < u.startup + u.active);
+            if !touches
                 // No throws on a body in the air, reeling or blocking.
-                || (m.height == Height::Grab && (d.y > 0 || d.stun > 0 || d.blockstun > 0 || d.held > 0))
-                || (rising && (a.y > 0 || m.height == Height::High))
-                || (a.y - d.y).abs() > if a.action == 10 { 1800 } else { 950 }
+                || (grab && (d.y > 0 || d.stun > 0 || d.blockstun > 0 || d.held > 0))
+                || (rising && a.y > 0)
             {
                 continue;
             }
@@ -739,8 +801,8 @@ impl Match {
                 } else {
                     0
                 };
-                let counter = attack(d.action).is_some_and(|m| d.frame < m.startup);
-                let punish = attack(d.action).is_some_and(|m| d.frame >= m.startup + m.active);
+                let counter = d_move.is_some_and(|m| d.frame < m.startup);
+                let punish = d_move.is_some_and(|m| d.frame >= m.startup + m.active);
                 let dealt = (m.damage + if counter { 3 } else { 0 })
                     * (100 - chain as i32 * 13).max(35)
                     / 100;
@@ -997,6 +1059,7 @@ fn select_action(f: &Fighter, bits: u32) -> u32 {
     }
     0
 }
+/// Ticks `action` lasts in the all-round style (`Fighter::duration` for a fighter's own).
 pub fn duration(action: u32) -> u32 {
     attack(action).map_or(if action == 3 { 24 } else { 0 }, |m| m.total)
 }
@@ -1048,6 +1111,11 @@ mod abi {
     #[no_mangle]
     pub extern "C" fn arena_bot(side: u32) -> u32 {
         GAME.with(|g| g.borrow_mut().bot_input((side as usize).min(1)))
+    }
+    /// A side's fighting style (0 all-round, 1 pressure, 2 range).
+    #[no_mangle]
+    pub extern "C" fn arena_style(side: u32, style: u32) {
+        GAME.with(|g| g.borrow_mut().set_style(side as usize, style));
     }
     /// The simulation tick (cheap, without serialising the state).
     #[no_mangle]
@@ -1685,6 +1753,119 @@ mod tests {
                 assert_eq!(b.serialize_json(), c.serialize_json(), "diverged after reload at tick {t}");
             }
             a.step(inputs);
+        }
+    }
+    #[test]
+    fn a_whiffed_kick_is_hit_on_the_leg() {
+        // At 1.7 m a front kick (reach 1.64 m) whiffs and a jab (1.18 m)
+        // cannot reach the kicker's body — but it reaches the stretched leg.
+        let stage = |kick: bool| {
+            let mut m = duel();
+            m.fighters[0].x = -850;
+            m.fighters[1].x = 850;
+            if kick {
+                m.fighters[0].action = 8;
+            }
+            // The jab comes after the kick's active frames, into its recovery
+            // (a jab into the active kick would lose its arm to it).
+            run(&mut m, [0, 0], 10);
+            run(&mut m, [0, LIGHT], 10);
+            m
+        };
+        let punished = stage(true);
+        assert!(punished.fighters[0].hp < 100, "the leg was hit");
+        assert_eq!(punished.fighters[1].hp, 100);
+        let idle = stage(false);
+        assert_eq!(idle.fighters[0].hp, 100, "the body is out of jab range");
+    }
+    #[test]
+    fn crouching_ducks_the_jab_guard_or_not_and_a_jump_clears_lows() {
+        for guard in [0, BLOCK] {
+            let mut m = duel();
+            run(&mut m, [0, CROUCH | guard], 4);
+            run(&mut m, [LIGHT, CROUCH | guard], 16);
+            assert_eq!(m.fighters[1].hp, 100);
+            assert_eq!(m.event, 0, "no hit, no block: the jab passes over");
+        }
+        // A cross (mid) hits the crouching head.
+        let mut m = duel();
+        run(&mut m, [0, CROUCH], 4);
+        m.fighters[0].action = 11;
+        run(&mut m, [0, CROUCH], 10);
+        assert!(m.fighters[1].hp < 100);
+        // A body 400 mm up is above a sweep (at the ankles).
+        let mut air = duel();
+        air.fighters[1].y = 400;
+        air.fighters[1].vy = 30;
+        air.fighters[0].action = 9;
+        air.fighters[0].frame = 13;
+        run(&mut air, [0, 0], 4);
+        assert_eq!(air.fighters[1].hp, 100);
+    }
+    #[test]
+    fn styles_change_reach_speed_and_survive_the_round() {
+        let walked = |style: u32| {
+            let mut m = duel();
+            m.set_style(0, style);
+            run(&mut m, [LEFT, 0], 60);
+            -400 - m.fighters[0].x
+        };
+        assert!(walked(moves::RANGE) > walked(moves::ALLROUND), "range retreats faster");
+        assert!(walked(moves::PRESSURE) < walked(moves::ALLROUND));
+        // At 1.76 m only the range style's side kick (U-U) lands.
+        let kick = |style: u32| {
+            let mut m = duel();
+            m.fighters[0].x = -880;
+            m.fighters[1].x = 880;
+            m.set_style(0, style);
+            m.fighters[0].action = 18;
+            run(&mut m, [0, 0], 20);
+            m.fighters[1].hp
+        };
+        assert!(kick(moves::RANGE) < 100);
+        assert_eq!(kick(moves::ALLROUND), 100);
+        assert_eq!(kick(moves::PRESSURE), 100);
+        // The pressure jab comes out a tick sooner.
+        assert_eq!(moves::attack_for(moves::PRESSURE, 1).unwrap().startup + 1, attack(1).unwrap().startup);
+        // Styles stay with the fighters into the next round.
+        let mut m = duel();
+        m.set_style(0, moves::PRESSURE);
+        m.set_style(1, moves::RANGE);
+        m.remaining = 1;
+        m.step([0, 0]);
+        run(&mut m, [0, 0], 270);
+        assert_eq!(m.round, 2);
+        assert_eq!([m.fighters[0].style, m.fighters[1].style], [moves::PRESSURE, moves::RANGE]);
+    }
+    #[test]
+    fn styles_are_close_in_bot_play() {
+        // Not a proof of fairness: the bot plays every matchup; no style may
+        // run away with it.
+        let mut wins = [[0u32; 3]; 3];
+        for a in 0..3u32 {
+            for b in 0..3u32 {
+                for seed in 1..=24u32 {
+                    let mut m = Match::new(seed * 7919 + a * 31 + b * 7);
+                    m.set_style(0, a);
+                    m.set_style(1, b);
+                    for _ in 0..60 * 60 * 4 {
+                        if m.phase == 3 {
+                            break;
+                        }
+                        let inputs = [m.bot_input(0), m.bot_input(1)];
+                        m.step(inputs);
+                    }
+                    if m.winner == 0 {
+                        wins[a as usize][b as usize] += 1;
+                    }
+                }
+            }
+        }
+        eprintln!("left wins of 24 (rows: left style, columns: right style): {wins:?}");
+        for a in 0..3 {
+            for b in 0..3 {
+                assert!((4..=20).contains(&wins[a][b]), "style {a} vs {b}: {} of 24", wins[a][b]);
+            }
         }
     }
     #[test]

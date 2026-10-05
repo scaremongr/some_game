@@ -34,6 +34,13 @@ const fighting = () => mode === 'local' || mode === 'online';
 // only a look: every body uses the same combat rules.
 const DEFAULT_FIGHTER = { id: 'medea', name: 'Медея', model: 'assets/character.glb', pack: 'assets/fight.pack', portrait: 'assets/fighters/medea.jpg' };
 let roster = [DEFAULT_FIGHTER], fighter = DEFAULT_FIGHTER, lobbyRival = DEFAULT_FIGHTER;
+// Fighting styles (combat/src/moves.rs): the same moves tuned for a plan.
+const STYLES = {
+  allround: { id: 0, name: 'Универсал', plan: 'Ровный набор без слабых мест: нога на средней дистанции, джеб вблизи, апперкот против прыжков. Учись на нём.' },
+  pressure: { id: 1, name: 'Напор', plan: 'Подходи вплотную: быстрый шаг, длинный рывок, который сразу переходит в удар или захват, быстрые джеб, хук и низкий удар, захват дальше. Ноги короче — издалека проигрываешь.' },
+  range: { id: 2, name: 'Дистанция', plan: 'Держи соперника на длине ноги: боковой удар (U, U), разворот и импульс достают дальше, быстрый отход и рывок назад. Вплотную медленнее.' },
+};
+const styleOf = f => STYLES[f?.style] || STYLES.allround;
 
 // ---- People: names and photos --------------------------------------------------
 // Everyone on screen is a person: name and photo in the lobby, the fight HUD,
@@ -192,7 +199,7 @@ function versus(fighters) {
     showPicture('vs-avatar-' + i, people[i]);
     text('vs-name-' + i, (i === side ? 'Ты' : people[i]?.name) || '');
     const p = people[i];
-    text('vs-fighter-' + i, (fighters[i]?.name || '') + (p?.league ? ` · ${p.league.icon} ${p.rating}` : ''));
+    text('vs-fighter-' + i, (fighters[i]?.name || '') + ' · ' + styleOf(fighters[i]).name + (p?.league ? ` · ${p.league.icon} ${p.rating}` : ''));
   }
   show('versus'); clearTimeout(versusTimer); versusTimer = setTimeout(() => show('versus', false), 2300);
 }
@@ -219,6 +226,7 @@ function renderRoster() {
     card.className = 'fighter'; card.setAttribute('role', 'radio'); card.dataset.id = f.id;
     if (f.portrait) { const img = new Image(); img.src = f.portrait; img.alt = ''; img.decoding = 'async'; img.draggable = false; img.onerror = () => img.remove(); card.append(img); }
     const name = document.createElement('span'); name.textContent = f.name; card.append(name);
+    const style = document.createElement('small'); style.className = 'style ' + (f.style || 'allround'); style.textContent = styleOf(f).name; card.append(style);
     card.onclick = () => pickFighter(f);
     return card;
   }));
@@ -262,7 +270,10 @@ $('fighters').addEventListener('scroll', stripArrows, { passive: true });
 $('fighters').addEventListener('wheel', e => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) { $('fighters').scrollLeft += e.deltaY; e.preventDefault(); } }, { passive: false });
 for (const [id, dir] of [['fighters-prev', -1], ['fighters-next', 1]]) $(id).onclick = () => $('fighters').scrollBy({ left: dir * 3 * 77, behavior: 'smooth' });
 window.addEventListener('resize', () => requestAnimationFrame(stripArrows));
-function markFighter() { for (const card of $('fighters').children) card.setAttribute('aria-checked', String(card.dataset.id === fighter.id)); }
+function markFighter() {
+  for (const card of $('fighters').children) card.setAttribute('aria-checked', String(card.dataset.id === fighter.id));
+  const style = styleOf(fighter); text('fighter-plan', `${fighter.name} · ${style.name}: ${style.plan}`);
+}
 function pickFighter(f) {
   fighter = f; prefs.set('pulse-fighter', f.id); markFighter(); haptic();
   $('fighters').querySelector(`[data-id="${f.id}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
@@ -288,7 +299,8 @@ function screen(next) {
   if (next === 'lobby') show('lobby');
   if (next === 'waiting') show('waiting');
   if (fighting()) { for (const id of ['hud', 'controls', 'fight-tools']) show(id); show('fight-tip', !touch); }
-  show('training-mode', next === 'local');
+  show('training-mode', next === 'local'); show('show-zones', next === 'local');
+  if (next !== 'local' && window.arenaShowBoxes) $('show-zones').click();
   if (tg?.BackButton) { if (next === 'lobby') tg.BackButton.hide(); else tg.BackButton.show(); }
   requestAnimationFrame(layout); roomPictures();
   if (fighting() && touch && innerHeight > innerWidth && !storage.get('pulse-rotate-hint')) {
@@ -455,7 +467,7 @@ function accept(next, isPaused = false, final = next.phase === 3) {
   if (state.phase === 3 && final) {
     if (!ended) {
       // The banner first; the card slides in while the winner starts dancing.
-      ended = performance.now(); show('controls', false); show('training-mode', false); show('room-damage', false); clearInput();
+      ended = performance.now(); show('controls', false); show('training-mode', false); show('show-zones', false); show('room-damage', false); clearInput();
       clearTimeout(resultTimer);
       resultTimer = setTimeout(() => { if (!ended) return; resultShown = true; show('announcement', false); show('hud', false); show('result'); requestAnimationFrame(layout); }, 2300);
     }
@@ -478,6 +490,7 @@ function startPractice() {
   simTime = performance.now();
   // The lobby's rival is already loaded: it becomes the bot, a new one waits.
   const bot = lobbyRival !== fighter ? lobbyRival : rival(); lobbyRival = rival();
+  local.style(0, styleOf(fighter).id); local.style(1, styleOf(bot).id);
   showPeople([me, { ...BOT, name: 'Бот · ' + bot.name }]); stage(fighter, bot); lastResult = null; renderResultRating();
   screen('local'); text('result-eyebrow', 'БОЙ ОКОНЧЕН'); text('mode', 'ТРЕНИРОВКА'); text('name-0', me.name); text('name-1', 'БОТ · ' + bot.name.toUpperCase()); text('rematch', 'Ещё бой →');
   versus([fighter, bot]);
@@ -707,6 +720,11 @@ $('share').onclick = () => {
   if (tg?.initData) tg.openTelegramLink(url); else window.open(url, '_blank', 'noopener,noreferrer');
 };
 $('training-mode').onclick = () => { trainingMode = (trainingMode + 1) % 4; text('training-mode', ['Бот: спарринг', 'Бот: манекен', 'Бот: верхний блок', 'Бот: нижний блок'][trainingMode]); };
+// Training: show the hit, hurt and push boxes (the renderer reads the flag).
+$('show-zones').onclick = () => {
+  window.arenaShowBoxes = !window.arenaShowBoxes;
+  text('show-zones', window.arenaShowBoxes ? 'Зоны: вкл' : 'Зоны: выкл'); $('show-zones').classList.toggle('on', window.arenaShowBoxes);
+};
 
 // ---- Online prediction (web/predict.js) -----------------------------------------
 function predict(m) {

@@ -48,6 +48,8 @@ miniquad_add_plugin({name:'pulse-arena',version:1,register_plugin(imports){
     new Uint8Array(wasm_memory.buffer, ptr, bytes.length).set(bytes);
     return bytes.length;
   };
+  // Debug flags: 1 draws the hit, hurt and push boxes (training "Зоны").
+  imports.env.fight_flags = () => (window.arenaShowBoxes ? 1 : 0);
   // Largest room texture side (0: no limit): phones keep GPU memory low.
   imports.env.fight_texture_cap = () => window.arenaTextureCap || 0;
   // Pictures for the room (web/scenery.js): [version, width, height], then pixels.
