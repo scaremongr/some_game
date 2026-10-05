@@ -114,8 +114,9 @@ Principles:
 - Marks: strikes by the striking limb's reach (`strike_marks`, `Marks::fit`,
   max speed-up 2.5×); falls by hips height; jumps by feet contact; throw by
   first two-hand reach. Knockdown lasts `KNOCKDOWN = 56` ticks, a grip
-  `HOLD = 32`. A strike take that does not carry the body to the opponent (the
-  uppercut is captured on the spot) gets a synthetic step-in before contact.
+  `HOLD = 32`. A strike keeps only as much of its clip's travel as the blow
+  needs to land; a whiff barely steps (≤ 15 cm). The uppercut, captured on the
+  spot, rises into the opponent over its startup when it will connect.
 - Guard readability: the block take pose, a cyan rim on a guarding fighter and
   a barrier flash (`Effects::shield`) where a blow meets the guard.
 - Baked room: `tools/room/apartment.py` authors five open furnished rooms;

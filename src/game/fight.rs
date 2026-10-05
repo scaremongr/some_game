@@ -267,7 +267,7 @@ impl FightScene {
             _ => self.reaction[target] = Reaction::from_attack(e.attacker_action),
         }
         let victim = &self.fighters[target];
-        let heavy = moves::attack(e.attacker_action).is_some_and(|m| m.damage >= 15);
+        let heavy = moves::attack(e.attacker_action).is_some_and(|m| m.heavy());
         let low = moves::attack(e.attacker_action).is_some_and(|m| m.height == moves::Height::Low);
         let fallback = vec3(
             self.bodies[target].x + victim.facing as f32 * 0.18,

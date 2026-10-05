@@ -1159,12 +1159,20 @@ impl FighterModel {
                     (_, Travel::InPlace | Travel::Air(_)) => 0.0,
                     (_, Travel::Keep) => 1.0,
                     (Clip::Attack(action), Travel::Return) => {
-                        let depth = match moves::attack(action).map(|m| m.height) {
+                        let m = moves::attack(action);
+                        let depth = match m.map(|m| m.height) {
                             Some(moves::Height::Low) => 0.30,
                             _ => 0.16,
                         };
-                        let wanted = (bodies[1 - side].x - x).abs() - depth - take.reach;
-                        if take.lunge > 0.05 { (wanted / take.lunge).clamp(0.0, 1.1) } else { 1.0 }
+                        // The body travels only as far as the blow needs to
+                        // land; a blow that cannot reach (a whiff) barely
+                        // steps. Blended over 15 cm of range, so no pop.
+                        let distance = (bodies[1 - side].x - x).abs();
+                        let wanted = distance - depth - take.reach;
+                        let reach = m.map_or(0.0, |m| m.reach as f32 / 1000.0);
+                        let lands = if f.connected { 1.0 } else { (1.0 - (distance - reach) / 0.15).clamp(0.0, 1.0) };
+                        let wanted = wanted.min(0.15) + (wanted - wanted.min(0.15)) * lands;
+                        if take.lunge > 0.05 { (wanted / take.lunge).clamp(0.0, 1.0) } else { 1.0 }
                     }
                     _ => 0.5,
                 };
@@ -1173,22 +1181,20 @@ impl FighterModel {
                     Travel::Air(w) => vec3(-hips_now.x, (take.stand_y - hips_now.y) * w, -hips_now.z),
                     _ => vec3(-take.start_hips.x, 0.0, -take.start_hips.z) - moved_in * (1.0 - keep),
                 };
-                // A take that does not carry the body far enough (the rising
-                // uppercut is captured on the spot) steps in for the rest:
-                // closed before the contact, given back in the recovery.
-                if let (Clip::Attack(action), Travel::Return) = (clip, travel) {
-                    if let Some(m) = moves::attack(action).filter(|_| action != 4 && action != 19) {
-                        let depth = if m.height == moves::Height::Low { 0.30 } else { 0.16 };
-                        let wanted = (bodies[1 - side].x - x).abs() - depth - take.reach;
-                        let short = (wanted - take.lunge.max(0.0) * 1.1).clamp(0.0, 0.45);
+                // The rising uppercut is captured on the spot: when it will
+                // connect, the body rises into the opponent over the startup
+                // and settles back in the recovery. Other strikes stay put.
+                if let (Clip::Attack(10), Travel::Return, Some(m)) = (clip, travel, moves::attack(10)) {
+                    let distance = (bodies[1 - side].x - x).abs();
+                    if distance * 1000.0 <= m.reach as f32 + 100.0 {
+                        let short = (distance - 0.16 - take.reach - take.lunge.max(0.0)).clamp(0.0, 0.3);
                         let (hit, active, end) = (m.startup as f32, (m.startup + m.active) as f32, m.total as f32);
                         let smooth = |u: f32| {
                             let u = u.clamp(0.0, 1.0);
                             u * u * (3.0 - 2.0 * u)
                         };
-                        let from = (hit - 8.0).max(0.0);
-                        let into = smooth((frame - from) / (hit - 1.0 - from).max(1.0));
-                        let back = smooth((frame - active - 2.0) / (end - active - 6.0).max(1.0));
+                        let into = smooth(frame / (hit - 1.0));
+                        let back = smooth((frame - active - 2.0) / (end - active - 6.0));
                         shift.z += short * into * (1.0 - back);
                     }
                 }

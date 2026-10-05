@@ -190,71 +190,127 @@ impl Match {
             self.phase = 3;
         }
     }
-    fn random(&mut self) -> u32 {
-        self.seed ^= self.seed << 13;
-        self.seed ^= self.seed >> 17;
-        self.seed ^= self.seed << 5;
-        self.seed
-    }
-    /// Bot commits at human-scale intervals and sometimes misreads the opponent.
-    pub fn bot_input(&mut self, side: usize) -> u32 {
+    /// Sparring bot with human limits: it sees an attack only after ~200 ms,
+    /// guards about half the time it could (sometimes at the wrong height),
+    /// never parries on reaction, moves in and out and attacks often. Its
+    /// plans come from a hash of short time windows, so they hold for a
+    /// while without extra state.
+    pub fn bot_input(&self, side: usize) -> u32 {
         let distance = (self.fighters[0].x - self.fighters[1].x).abs();
         let toward = if side == 0 { RIGHT } else { LEFT };
         let away = if side == 0 { LEFT } else { RIGHT };
         let enemy = self.fighters[1 - side].clone();
         let me = self.fighters[side].clone();
-        // Grabbed: breaks the throw about one time in three.
+        let salt = self.round.wrapping_mul(7919) ^ (side as u32).wrapping_mul(104_729) ^ self.seed;
+        let roll = |key: u32| mix(key ^ salt) % 100;
+        // Grabbed: breaks the throw about one time in four.
         if me.held > 0 {
-            return if me.held == HOLD - 3 && self.random() % 3 == 0 { THROW } else { 0 };
+            return if me.held == HOLD - 4 && roll(self.tick) < 25 { THROW } else { 0 };
         }
-        if (me.stun > 0 || (me.juggle > 0 && me.y > 0)) && me.meter >= 1000 && self.tick % 17 == 0 {
+        // A full bar breaks a real combo now and then, a moment after a hit.
+        if (me.stun > 0 || (me.juggle > 0 && me.y > 0))
+            && me.meter >= 1000
+            && enemy.combo >= 2
+            && me.frame == 6
+            && roll(self.tick.wrapping_sub(me.frame) ^ 0xB4) < 25
+        {
             return BLOCK | DASH;
         }
-        if me.confirmed {
+        // A blocked blow: keep the guard until it can act again.
+        if me.blockstun > 0 {
+            return BLOCK | if me.crouch { CROUCH } else { 0 };
+        }
+        // Strings: always on a hit, sometimes on a block.
+        let string = me.confirmed || (me.connected && roll(self.tick / 8) < 40);
+        if string {
             if me.action == 1 && me.frame >= 9 {
                 return if me.previous & LIGHT == 0 { LIGHT } else { 0 };
             }
-            if me.action == 11 && me.frame >= 8 {
+            if me.action == 11 && me.frame >= 8 && me.confirmed {
                 return KICK;
             }
-            if me.action == 16 && me.frame >= 10 && distance < 1150 {
+            if me.action == 16 && me.frame >= 10 && me.confirmed && distance < 1150 {
                 return CROUCH | HEAVY;
             }
         }
         if me.y > 200 && distance < 1500 {
             return KICK;
         }
-        // Anti-air: a jump into range meets the rising uppercut.
-        if enemy.y > 250 && me.y == 0 && distance < 1700 && self.tick % 3 != 0 {
-            return CROUCH | HEAVY;
-        }
-        // Reads the wind-up and guards at the right height.
-        if let Some(m) = attack(enemy.action) {
-            if enemy.frame > 5 && enemy.frame < m.startup && m.height != Height::Grab && self.tick % 5 != 0 {
-                return BLOCK | if m.height == Height::Low { CROUCH } else { 0 };
+        let window = (self.tick + side as u32 * 7) / 15;
+        // A jump coming in: an uppercut now and then, otherwise a guard.
+        if enemy.y > 300 && me.y == 0 && distance < 1500 {
+            let r = roll(window ^ 0xA11);
+            if r < 35 {
+                return CROUCH | HEAVY;
+            } else if r < 70 {
+                return BLOCK;
             }
         }
-        if distance > 1450 {
-            return toward;
+        if let Some(m) = attack(enemy.action) {
+            // Human reaction: seen for 12 ticks, still 7 left (a plain block,
+            // never a parry); about half of them, a quarter at the wrong height.
+            let seen = enemy.frame >= 12 && enemy.frame + PARRY < m.startup;
+            let key = self.tick.wrapping_sub(enemy.frame) / 16 ^ enemy.action;
+            if seen && m.height != Height::Grab && roll(key) < 50 {
+                let low = (m.height == Height::Low) != (roll(key ^ 0x5EED) < 25);
+                return BLOCK | if low { CROUCH } else { 0 };
+            }
+            // A slow attack whiffed or blocked close by: punish it.
+            let recovering = enemy.frame >= m.startup + m.active && m.total - enemy.frame >= 10;
+            if recovering && distance < 1200 && roll(key ^ 0xBEEF) < 45 {
+                return if me.previous & LIGHT == 0 { LIGHT } else { 0 };
+            }
         }
-        if me.stamina < 240 {
-            return away | BLOCK;
+        if me.stamina < 200 {
+            return away;
         }
-        if self.tick % 19 != 0 {
-            return if distance < 700 { away } else { 0 };
+        let plan = roll(window);
+        let opening = (self.tick + side as u32 * 7) % 15 == 0;
+        if distance > 1700 {
+            return match plan {
+                0..=74 => toward,
+                75..=84 if opening && distance < 2300 => JUMP | toward,
+                _ => 0,
+            };
         }
-        let meter = me.meter;
-        match self.random() % 14 {
-            0 => away | DASH,
-            1 if distance < 1000 => THROW,
-            2 => CROUCH | KICK,
-            3 => CROUCH | HEAVY,
-            4 => JUMP | toward,
-            5 if meter >= 500 => SPECIAL,
-            6 => HEAVY,
-            7..=8 => KICK,
-            9 => CROUCH | LIGHT,
-            _ => LIGHT,
+        match plan {
+            0..=35 => {
+                if !opening {
+                    return 0;
+                }
+                let pick = roll(window ^ 0x77);
+                if distance > 1350 {
+                    match pick {
+                        0..=44 => KICK,
+                        45..=64 => HEAVY,
+                        65..=74 if me.meter >= 500 => SPECIAL,
+                        _ => toward,
+                    }
+                } else {
+                    match pick {
+                        0..=29 => LIGHT,
+                        30..=44 => CROUCH | LIGHT,
+                        45..=59 => KICK,
+                        60..=69 => CROUCH | KICK,
+                        70..=77 => HEAVY,
+                        78..=89 if distance < 1050 => THROW,
+                        90..=94 => CROUCH | HEAVY,
+                        _ => LIGHT,
+                    }
+                }
+            }
+            36..=55 => toward,
+            56..=67 => away,
+            // Holds a guard for a while: a throw or the other height opens it.
+            68..=79 => BLOCK | if roll(window ^ 0xC0) < 35 { CROUCH } else { 0 },
+            80..=92 => 0,
+            _ => {
+                if opening && roll(window ^ 0xD5) < 50 {
+                    away | DASH
+                } else {
+                    0
+                }
+            }
         }
     }
     /// Between rounds and after the match nobody fights, but bodies still
@@ -651,7 +707,7 @@ impl Match {
                         defender.guard = false;
                         defender.action = 5;
                     }
-                    self.freeze = 4;
+                    self.freeze = 5;
                 }
             } else {
                 // Chains are true only while the victim is still in hitstun/airborne.
@@ -679,7 +735,7 @@ impl Match {
                 defender.crouch = false;
                 defender.blockstun = 0;
                 defender.vx = a.facing * m.push;
-                defender.recoil_v = if m.damage >= 15 { 150 } else { 80 };
+                defender.recoil_v = if m.heavy() { 150 } else { 80 };
                 if m.launch > 0 || d.y > 0 {
                     defender.juggle += 1;
                     defender.vy = if defender.juggle >= 4 {
@@ -728,10 +784,10 @@ impl Match {
                 };
                 self.freeze = if grab {
                     6
-                } else if m.damage >= 15 {
-                    9
+                } else if m.heavy() {
+                    11
                 } else {
-                    5
+                    7
                 } + if counter { 2 } else { 0 };
             }
         }
@@ -859,6 +915,14 @@ impl Match {
         }
     }
 }
+/// Integer hash for the bot's plans (deterministic, no state).
+fn mix(mut x: u32) -> u32 {
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x7FEB_352D);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x846C_A68B);
+    x ^ (x >> 16)
+}
 fn select_action(f: &Fighter, bits: u32) -> u32 {
     if bits == 0 {
         return 0;
@@ -969,7 +1033,7 @@ mod tests {
     fn hit_only_once_and_held_button_does_not_repeat() {
         let mut m = duel();
         run(&mut m, [LIGHT, 0], 100);
-        assert_eq!(m.fighters[1].hp, 92);
+        assert_eq!(m.fighters[1].hp, 100 - attack(1).unwrap().damage);
     }
     #[test]
     fn range_matters() {
@@ -1070,7 +1134,7 @@ mod tests {
         run(&mut m, [THROW, BLOCK], 20);
         assert_eq!(m.fighters[1].held > 0, true, "a held guard does not stop a grab");
         run(&mut m, [0, BLOCK], 50);
-        assert_eq!(m.fighters[1].hp, 83, "the throw's damage lands with the slam");
+        assert_eq!(m.fighters[1].hp, 100 - attack(4).unwrap().damage, "the throw's damage lands with the slam");
     }
     #[test]
     fn thrown_body_lands_before_the_thrower_recovers() {
@@ -1097,7 +1161,7 @@ mod tests {
         assert!(held + 1 >= HOLD as usize, "held for {held} ticks");
         let (landed, recovered) = (landed.expect("thrown"), recovered.expect("recovered"));
         assert!(landed < recovered, "lands on {landed}, thrower free on {recovered}");
-        assert_eq!(m.fighters[1].hp, 83);
+        assert_eq!(m.fighters[1].hp, 100 - attack(4).unwrap().damage);
     }
     #[test]
     fn airborne_fighters_land_after_the_round_and_the_match() {
@@ -1131,8 +1195,8 @@ mod tests {
     fn simultaneous_hits_trade() {
         let mut m = duel();
         run(&mut m, [LIGHT, LIGHT], 12);
-        assert_eq!(m.fighters[0].hp, 92);
-        assert_eq!(m.fighters[1].hp, 92);
+        assert_eq!(m.fighters[0].hp, 100 - attack(1).unwrap().damage);
+        assert_eq!(m.fighters[1].hp, 100 - attack(1).unwrap().damage);
     }
     #[test]
     fn timeout_and_first_to_two() {
@@ -1164,7 +1228,7 @@ mod tests {
         let mut standing = duel();
         run(&mut standing, [0, BLOCK], 10);
         run(&mut standing, [CROUCH | KICK, BLOCK], 25);
-        assert_eq!(standing.fighters[1].hp, 87);
+        assert_eq!(standing.fighters[1].hp, 100 - attack(9).unwrap().damage);
         let mut low = duel();
         run(&mut low, [0, CROUCH | BLOCK], 10);
         run(&mut low, [CROUCH | KICK, CROUCH | BLOCK], 25);
@@ -1181,7 +1245,7 @@ mod tests {
     fn three_hit_string_is_confirmed_scaled_and_buffered_through_hitstop() {
         let mut m = duel();
         run(&mut m, [LIGHT, 0], 8);
-        assert_eq!(m.fighters[1].hp, 92);
+        assert_eq!(m.fighters[1].hp, 100 - attack(1).unwrap().damage);
         m.step([0, 0]);
         m.step([LIGHT, 0]); // second press during hitstop
         for _ in 0..30 {
@@ -1199,7 +1263,8 @@ mod tests {
             }
         }
         assert_eq!(m.fighters[0].combo, 3);
-        assert!(m.fighters[0].combo_damage < 8 + 9 + 17);
+        let full: i32 = [1, 11, 12].iter().map(|&a| attack(a).unwrap().damage).sum();
+        assert!(m.fighters[0].combo_damage < full);
         assert_eq!(m.fighters[1].hp, 100 - m.fighters[0].combo_damage);
     }
     #[test]
@@ -1459,7 +1524,7 @@ mod tests {
         run(&mut late, [0, 0], 20);
         late.step([0, THROW]);
         run(&mut late, [0, 0], 60);
-        assert_eq!(late.fighters[1].hp, 83);
+        assert_eq!(late.fighters[1].hp, 100 - attack(4).unwrap().damage);
         // A defender in blockstun cannot be grabbed.
         let mut pressure = duel();
         pressure.fighters[1].guard = true;

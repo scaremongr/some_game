@@ -32,7 +32,7 @@ test('two clients: matchmaking, authoritative hits, sequence validation, resume,
     await delay(230);a.send({type:'input',seq:2,bits:2});b.send({type:'input',seq:2,bits:1});
     await delay(180);a.send({type:'input',seq:3,bits:8});b.send({type:'input',seq:3,bits:0});
     const hit=await a.wait('state',m=>m.state.fighters[1].hp<100);
-    assert.equal(hit.state.fighters[1].hp,92);
+    assert.equal(hit.state.fighters[1].hp,93); // jab: 7 damage (combat/src/moves.rs)
     const same=await b.wait('state',m=>m.state.tick===hit.state.tick);assert.deepEqual(same.state,hit.state);
     a.send({type:'input',seq:2,bits:16});a.send({type:'input',seq:4,bits:8192});
     const validated=await a.wait('state',m=>m.state.tick>hit.state.tick);assert.equal(validated.ack[0],3);

@@ -22,6 +22,12 @@ pub struct Move {
     pub height: Height,
     pub knockdown: bool,
 }
+impl Move {
+    /// Heavy blows get the longer hitstop, the bigger recoil and effects.
+    pub fn heavy(&self) -> bool {
+        self.damage >= 13
+    }
+}
 /// Ticks after the grab during which the victim can break a throw (THROW).
 pub const TECH: u32 = 10;
 pub fn attack(action: u32) -> Option<Move> {
@@ -45,22 +51,22 @@ pub fn attack(action: u32) -> Option<Move> {
         height,
         knockdown,
     ) = match action {
-        1 => (7, 3, 20, 1180, 8, 22, 11, 50, 18, 0, High, false),
-        2 => (21, 3, 47, 1550, 21, 30, 14, 220, 165, 42, Overhead, true),
+        1 => (7, 3, 20, 1180, 7, 22, 11, 50, 18, 0, High, false),
+        2 => (21, 3, 47, 1550, 17, 30, 14, 220, 165, 42, Overhead, true),
         // The throw holds its victim for HOLD ticks after the grab (lib.rs).
-        4 => (13, 2, 56, 1150, 17, 35, 0, 180, 0, 0, Grab, true),
-        8 => (11, 4, 30, 1640, 11, 26, 14, 90, 35, 0, Mid, false),
-        9 => (14, 3, 42, 1540, 13, 32, 11, 140, 55, 0, Low, true),
+        4 => (13, 2, 56, 1150, 14, 35, 0, 180, 0, 0, Grab, true),
+        8 => (11, 4, 30, 1640, 9, 26, 14, 90, 35, 0, Mid, false),
+        9 => (14, 3, 42, 1540, 11, 32, 11, 140, 55, 0, Low, true),
         // Rising uppercut from a crouch: anti-air, beats high attacks while
         // it rises (lib.rs), launches; very unsafe on block.
-        10 => (12, 4, 46, 1250, 16, 42, 12, 180, 32, 110, Mid, true),
-        11 => (6, 3, 24, 1300, 9, 24, 13, 50, 24, 0, Mid, false),
-        12 => (12, 4, 38, 1780, 17, 30, 14, 150, 145, 45, Mid, true),
-        13 => (7, 6, 28, 1580, 12, 26, 15, 100, 55, 0, Overhead, false),
-        14 => (18, 5, 46, 2150, 25, 34, 26, 160, 190, 55, Mid, true),
+        10 => (12, 4, 46, 1250, 13, 42, 12, 180, 32, 110, Mid, true),
+        11 => (6, 3, 24, 1300, 7, 24, 13, 50, 24, 0, Mid, false),
+        12 => (12, 4, 38, 1780, 14, 30, 14, 150, 145, 45, Mid, true),
+        13 => (7, 6, 28, 1580, 10, 26, 15, 100, 55, 0, Overhead, false),
+        14 => (18, 5, 46, 2150, 20, 34, 26, 160, 190, 55, Mid, true),
         // Quick low kick from a crouch: opens a standing guard, no knockdown.
-        16 => (8, 3, 24, 1450, 6, 20, 12, 60, 20, 0, Low, false),
-        19 => (18, 3, 44, 950, 14, 24, 10, 140, 45, 0, Mid, false),
+        16 => (8, 3, 24, 1450, 5, 20, 12, 60, 20, 0, Low, false),
+        19 => (18, 3, 44, 950, 12, 24, 10, 140, 45, 0, Mid, false),
         _ => return None,
     };
     Some(Move {
