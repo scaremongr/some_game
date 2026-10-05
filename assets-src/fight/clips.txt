@@ -61,3 +61,9 @@ gut_big = 100 Receiving A Big Hit In The Stomach.glb
 victory2 = 136 Rallying The Crowd To Make Them Cheer.glb @ 0-5
 victory3 = 156 Celebrating After A Win.glb @ 0-6
 defeat2 = 137 Showing Frustration After A Loss.glb @ 0-5
+# The winner dances once the match is over (Mixamo dances, picked per match).
+dance = 170 Silly Dancing.glb
+dance2 = 171 Hip Hop Dancing.glb
+dance3 = 172 Robot Hip Hop Dance.glb @ 0-10
+dance4 = 174 Thriller Part 3.glb @ 3-13
+dance5 = 173 House Dancing.glb @ 0-10

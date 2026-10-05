@@ -272,6 +272,13 @@ pub struct Renderer3D {
     pipeline_baked: Pipeline,
     /// Window glass: tinted and see-through, blended over what is behind.
     pipeline_glass: Pipeline,
+    /// Flat pictures in the room (screens, canvases): a textured quad,
+    /// blended, depth-tested like the room around it.
+    pipeline_sprite: Pipeline,
+    /// The city behind the windows: drawn before the room at the far end of
+    /// the depth range, never clipped by the far plane.
+    pipeline_backdrop: Pipeline,
+    sprite_quad: Bindings,
     /// Заглушка 1x1 для материалов без текстуры: так в шейдере не нужна
     /// ветка «есть текстура / нет текстуры».
     white: TextureId,
@@ -412,6 +419,74 @@ impl Renderer3D {
 
         let white = ctx.new_texture_from_rgba8(1, 1, &[255, 255, 255, 255]);
 
+        let sprite_shader = ctx
+            .new_shader(
+                ShaderSource::Glsl {
+                    vertex: SPRITE_VERTEX_SHADER,
+                    fragment: SPRITE_FRAGMENT_SHADER,
+                },
+                ShaderMeta {
+                    images: vec!["tex".to_string()],
+                    uniforms: UniformBlockLayout {
+                        uniforms: vec![
+                            UniformDesc::new("mvp", UniformType::Mat4),
+                            UniformDesc::new("tint", UniformType::Float4),
+                            UniformDesc::new("params", UniformType::Float4),
+                        ],
+                    },
+                },
+            )
+            .expect("sprite shader compilation failed");
+        let sprite_attributes = [
+            VertexAttribute::new("in_pos", VertexFormat::Float3),
+            VertexAttribute::new("in_uv", VertexFormat::Float2),
+        ];
+        let blend = Some(BlendState::new(
+            Equation::Add,
+            BlendFactor::Value(BlendValue::SourceAlpha),
+            BlendFactor::OneMinusValue(BlendValue::SourceAlpha),
+        ));
+        let pipeline_sprite = ctx.new_pipeline(
+            &[BufferLayout::default()],
+            &sprite_attributes,
+            sprite_shader,
+            PipelineParams {
+                depth_test: Comparison::LessOrEqual,
+                depth_write: true,
+                cull_face: CullFace::Nothing,
+                color_blend: blend,
+                ..Default::default()
+            },
+        );
+        let pipeline_backdrop = ctx.new_pipeline(
+            &[BufferLayout::default()],
+            &sprite_attributes,
+            sprite_shader,
+            PipelineParams {
+                // Behind everything drawn before it (the mask around the
+                // windows), in front of the cleared depth. miniquad 0.4
+                // turns the depth test off with depth writes, so it writes;
+                // at the far end of the range that hides nothing.
+                depth_test: Comparison::LessOrEqual,
+                depth_write: true,
+                cull_face: CullFace::Nothing,
+                color_blend: blend,
+                ..Default::default()
+            },
+        );
+        // Unit quad: x right, y up, uv from the top-left like an image.
+        let quad: [f32; 20] = [
+            0.0, 0.0, 0.0, 0.0, 1.0, //
+            1.0, 0.0, 0.0, 1.0, 1.0, //
+            1.0, 1.0, 0.0, 1.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0, 0.0,
+        ];
+        let sprite_quad = Bindings {
+            vertex_buffers: vec![ctx.new_buffer(BufferType::VertexBuffer, BufferUsage::Immutable, BufferSource::slice(&quad))],
+            index_buffer: ctx.new_buffer(BufferType::IndexBuffer, BufferUsage::Immutable, BufferSource::slice(&[0u16, 1, 2, 0, 2, 3])),
+            images: vec![white],
+        };
+
         Renderer3D {
             pipeline,
             pipeline_double_sided,
@@ -419,6 +494,9 @@ impl Renderer3D {
             pipeline_shadow,
             pipeline_baked,
             pipeline_glass,
+            pipeline_sprite,
+            pipeline_backdrop,
+            sprite_quad,
             white,
             // На стеке эта структура — десятки килобайт, что для wasm-потока
             // уже ощутимо.
@@ -598,6 +676,71 @@ impl Renderer3D {
         }
     }
 }
+
+impl Renderer3D {
+    /// A picture on a flat quad: `model` maps the unit square (x right, y up)
+    /// onto the picture's place; `tint` multiplies colour and alpha. `far`
+    /// > 0 draws backdrop: depth pinned at that share of the far end (a
+    /// nearer layer takes a smaller share to stay in front).
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_sprite(
+        &mut self,
+        ctx: &mut dyn RenderingBackend,
+        texture: TextureId,
+        model: Mat4,
+        camera: &Camera,
+        aspect: f32,
+        tint: [f32; 4],
+        far: f32,
+    ) {
+        ctx.apply_pipeline(if far > 0.0 { &self.pipeline_backdrop } else { &self.pipeline_sprite });
+        self.sprite_quad.images[0] = texture;
+        ctx.apply_bindings(&self.sprite_quad);
+        let u = SpriteUniforms {
+            mvp: (camera.view_proj(aspect) * model).0,
+            tint,
+            params: [far, 0.0, 0.0, 0.0],
+        };
+        ctx.apply_uniforms(UniformsSource::table(&u));
+        ctx.draw(0, 6, 1);
+    }
+}
+
+#[repr(C)]
+struct SpriteUniforms {
+    mvp: [f32; 16],
+    tint: [f32; 4],
+    params: [f32; 4],
+}
+
+const SPRITE_VERTEX_SHADER: &str = r#"
+attribute vec3 in_pos;
+attribute vec2 in_uv;
+uniform mat4 mvp;
+uniform vec4 tint;
+uniform vec4 params;
+varying vec2 v_uv;
+void main() {
+    v_uv = in_uv;
+    vec4 p = mvp * vec4(in_pos, 1.0);
+    // The backdrop lies far beyond the far plane: pin it just inside.
+    if (params.x > 0.0) p.z = p.w * params.x;
+    gl_Position = p;
+}
+"#;
+
+const SPRITE_FRAGMENT_SHADER: &str = r#"
+#ifdef GL_ES
+precision mediump float;
+#endif
+varying vec2 v_uv;
+uniform sampler2D tex;
+uniform vec4 tint;
+void main() {
+    vec4 c = texture2D(tex, v_uv);
+    gl_FragColor = vec4(c.rgb * tint.rgb, c.a * tint.a);
+}
+"#;
 
 /// Baked surfaces: the texture already holds light and tone (Blender's AgX
 /// view transform), so it is shown as is, scaled by the room exposure.

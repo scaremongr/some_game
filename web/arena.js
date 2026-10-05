@@ -1,4 +1,6 @@
 import { simulation } from './combat.js';
+import { loadCity, showPeople as showRoomPictures } from './scenery.js';
+import * as sfx from './sound.js';
 const $ = id => document.getElementById(id);
 const tg = window.Telegram?.WebApp;
 const encoder = new TextEncoder();
@@ -13,8 +15,10 @@ let module, local, state, mode = 'lobby', side = 0, socket, authenticated = fals
 let config = { dev: false, miniApp: '' }, seq = Date.now() * 1000, lastSnapshot = 0, lastEvent = 0, eventUntil = 0;
 let reconnectTimer, reconnectStarted = 0, toastTimer, paused = false, rematchPossible = true, rematchRequested = false;
 let wallImpacts = [0, 0], wallRound = 0;
-let sound = false, audio, bits = 0, shownBits = -1, lastSent = 0, stopped = false, trainingMode = 0;
+let bits = 0, shownBits = -1, lastSent = 0, stopped = false, trainingMode = 0;
 let simTime = 0, netOffset = null, pendingEdges = 0, openedByLink = false;
+// Match end: the winner dances under a banner, the result card follows.
+let ended = 0, resultShown = false, resultTimer;
 const held = new Map(), latched = new Map();
 const touch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 const storage = { get(k) { try { return sessionStorage.getItem(k); } catch { return null; } }, set(k, v) { try { sessionStorage.setItem(k, v); } catch {} } };
@@ -54,7 +58,9 @@ function showPictureEl(img, p) {
 }
 // Bodies on each side (kept for the victory card).
 let onStage = [DEFAULT_FIGHTER, DEFAULT_FIGHTER];
-function stage(left, right) { onStage = [left, right]; window.arenaFighters = [left, right].map(f => ({ model: f.model, pack: f.pack })); }
+function stage(left, right) { onStage = [left, right]; window.arenaFighters = [left, right].map(f => ({ model: f.model, pack: f.pack })); roomPictures(); }
+// The TV, laptop and canvases in the room show the people of this fight.
+function roomPictures() { showRoomPictures({ people, fighters: onStage, side, live: fighting() }).catch(() => {}); }
 
 // ---- Rating, leaderboard, victory card, revenge ----------------------------------
 let myCard = null, lastResult = null, challengeTimer;
@@ -163,7 +169,7 @@ async function brag() {
   } catch { $('brag').disabled = false; text('brag', '📣 Похвастаться в чате'); toast('Не получилось подготовить карточку. Попробуй ещё раз.'); }
 }
 // Test hooks: the victory card of the last result, the signed-in player id.
-window.arenaTest = { card: () => lastResult && makeCard(lastResult), me: () => me.id };
+window.arenaTest = { card: () => lastResult && makeCard(lastResult), me: () => me.id, sound: sfx };
 function showChallenge(m) {
   if (fighting() && mode === 'online') return;
   showPictureEl($('challenge-avatar'), m.from); text('challenge-name', m.from.name);
@@ -173,6 +179,7 @@ function showChallenge(m) {
 function showPeople(list = people) {
   people = list;
   for (let i = 0; i < 2; i++) showPicture('avatar-' + i, list[i]);
+  roomPictures();
 }
 // «VS» splash as a fight begins: who fights whom, with which fighter.
 let versusTimer;
@@ -270,13 +277,16 @@ function haptic(kind = 'light') {
 
 function screen(next) {
   mode = next; panels.forEach(id => show(id, false)); show('announcement', false); text('combat-event', '');
+  ended = 0; resultShown = false; clearTimeout(resultTimer); show('room-damage');
+  if (fighting()) { heard = null; matchesPlayed++; }
+  pickMusic();
   document.body.classList.toggle('fighting', fighting());
   if (next === 'lobby') show('lobby');
   if (next === 'waiting') show('waiting');
   if (fighting()) { for (const id of ['hud', 'controls', 'fight-tools']) show(id); show('fight-tip', !touch); }
   show('training-mode', next === 'local');
   if (tg?.BackButton) { if (next === 'lobby') tg.BackButton.hide(); else tg.BackButton.show(); }
-  requestAnimationFrame(layout);
+  requestAnimationFrame(layout); roomPictures();
   if (fighting() && touch && innerHeight > innerWidth && !storage.get('pulse-rotate-hint')) {
     storage.set('pulse-rotate-hint', '1');
     // After the VS splash, not over it.
@@ -291,6 +301,7 @@ function viewport() {
   const canvas = $('glcanvas'); canvas.style.width = w + 'px'; canvas.style.height = h + 'px'; document.body.style.height = h + 'px';
   const root = document.documentElement.style;
   for (const [name, css] of [['top', '--tg-top'], ['bottom', '--tg-bottom'], ['left', '--tg-left'], ['right', '--tg-right']]) root.setProperty(css, inset(name) + 'px');
+  root.setProperty('--tg-safe-top', (tg?.safeAreaInset?.top || 0) + 'px');
   const body = document.body.classList;
   body.toggle('touch', touch); body.toggle('portrait', h > w); body.toggle('landscape', h <= w);
   if (window.wasm_exports && typeof window.resize === 'function') window.resize(canvas, window.wasm_exports.resize);
@@ -299,16 +310,27 @@ function viewport() {
 }
 // Tells the renderer which screen band is free for the fighters.
 function layout() {
-  const h = $('glcanvas').clientHeight || innerHeight;
-  let top = 0.1, bottom = 0.95;
+  const h = $('glcanvas').clientHeight || innerHeight, w = $('glcanvas').clientWidth || innerWidth;
+  let top = 0.1, bottom = 0.95, left = 0, right = 1;
+  if (mode === 'lobby') {
+    // The lobby shows your fighter and the next rival where the page is free.
+    const card = document.querySelector('.play-card').getBoundingClientRect(), intro = document.querySelector('.intro').getBoundingClientRect();
+    const bar = document.querySelector('.topbar').getBoundingClientRect();
+    if (h > w) { top = (intro.bottom + 2) / h; bottom = (card.top - 16) / h; }
+    else { top = (bar.bottom + 2) / h; bottom = Math.min(0.97, (intro.top - 2) / h + 0.12); right = Math.max(0.45, (card.left - 8) / w); }
+  }
   if (fighting()) {
     top = ($('hud').getBoundingClientRect().bottom + 6) / h;
+    // Landscape keeps the tools in the corners, clear of the fighters.
     const tools = $('fight-tools').getBoundingClientRect();
-    if (tools.height && tools.bottom < h * 0.4) top = Math.max(top, (tools.bottom + 4) / h);
+    if (tools.height && tools.bottom < h * 0.4 && h > innerWidth) top = Math.max(top, (tools.bottom + 4) / h);
     bottom = 0.985;
     if (touch && h > innerWidth) bottom = Math.min(bottom, ($('pad').getBoundingClientRect().top - 8) / h);
+    // The result card: the dancing winner stays above it.
+    // (offsetTop: the card's slide-in transform does not count.)
+    if (resultShown) bottom = ($('result').offsetTop - 10) / h;
   }
-  window.arenaLayout = [Math.min(top, 0.6), Math.max(bottom, top + 0.3)];
+  window.arenaLayout = [Math.min(top, 0.6), Math.max(bottom, top + 0.3), left, right];
 }
 function canFullscreen() {
   if (tg?.requestFullscreen && tg.isVersionAtLeast?.('8.0')) return true;
@@ -323,29 +345,59 @@ function toggleFullscreen() {
 }
 
 // ---- Sound ------------------------------------------------------------------
-function tone(kind) {
-  if (!sound) return;
-  try {
-    audio ||= new (window.AudioContext || window.webkitAudioContext)(); audio.resume();
-    const osc = audio.createOscillator(), gain = audio.createGain(), time = audio.currentTime;
-    const heavy = kind === 5 || kind === 8 || kind === 10 || state?.fighters[1 - state.event_target]?.action === 2;
-    const duration = kind === 3 ? .13 : heavy ? .23 : .11;
-    osc.type = kind === 3 ? 'sine' : 'triangle'; osc.frequency.setValueAtTime(kind === 3 ? 980 : kind === 2 ? 270 : heavy ? 92 : 165, time);
-    osc.frequency.exponentialRampToValueAtTime(kind === 3 ? 1450 : 40, time + duration);
-    gain.gain.setValueAtTime(heavy ? .22 : .12, time); gain.gain.exponentialRampToValueAtTime(.001, time + duration);
-    osc.connect(gain); gain.connect(audio.destination); osc.start(); osc.stop(time + duration + .01);
-    const buffer = audio.createBuffer(1, Math.ceil(audio.sampleRate * .14), audio.sampleRate);
-    const data = buffer.getChannelData(0); for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
-    const noise = audio.createBufferSource(), filter = audio.createBiquadFilter(), crack = audio.createGain();
-    noise.buffer = buffer; filter.type = 'bandpass'; filter.frequency.value = kind === 2 ? 1800 : 850;
-    crack.gain.setValueAtTime(kind === 2 ? .10 : .18, time); crack.gain.exponentialRampToValueAtTime(.001, time + .10);
-    noise.connect(filter); filter.connect(crack); crack.connect(audio.destination); noise.start(time);
-  } catch {}
+// Music and effects, effects only, or silence; remembered on this device.
+const SOUND_MODES = ['all', 'sfx', 'off'];
+const SOUND_LABELS = { all: ['♪ МУЗЫКА И ЗВУК', 'Музыка и звуки включены'], sfx: ['♪ ТОЛЬКО ЗВУКИ', 'Только звуки, без музыки'], off: ['♪ ЗВУК ВЫКЛ', 'Звук выключен'] };
+function setSound(next, announce = true) {
+  sfx.setMode(next); prefs.set('pulse-sound', next);
+  text('sound', SOUND_LABELS[next][0]);
+  $('fight-sound').classList.toggle('on', next !== 'off'); $('fight-sound').classList.toggle('muted', next === 'off');
+  text('fight-sound', next === 'sfx' ? '♩' : '♪');
+  for (const id of ['sound', 'fight-sound']) $(id).setAttribute('aria-label', 'Звук: ' + SOUND_LABELS[next][1].toLowerCase() + '. Нажми, чтобы переключить');
+  if (announce) { toast(SOUND_LABELS[next][1], 1400); sfx.play('click'); }
+  pickMusic();
 }
-function setSound(on) {
-  sound = on; text('sound', sound ? 'ЗВУК ВКЛ' : 'ЗВУК ВЫКЛ'); $('fight-sound').classList.toggle('on', sound);
-  for (const id of ['sound', 'fight-sound']) $(id).setAttribute('aria-label', sound ? 'Выключить звук' : 'Включить звук');
-  tone(3);
+function cycleSound() { setSound(SOUND_MODES[(SOUND_MODES.indexOf(sfx.getMode()) + 1) % SOUND_MODES.length]); }
+let matchesPlayed = 0;
+function pickMusic() { sfx.music(fighting() ? (matchesPlayed % 2 ? 'night' : 'pulse') : 'lobby'); }
+// What the last state sounded like: each new event makes its sound once.
+let heard = null;
+const HEAVY = new Set([2, 9, 10, 12, 13, 14, 18, 19]), MEDIUM = new Set([8, 11, 16, 17]);
+const ATTACKS = new Set([1, 2, 4, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18, 19]);
+const weightOf = action => HEAVY.has(action) ? 0.85 : MEDIUM.has(action) ? 0.55 : 0.3;
+// Sounds follow the picture: online it trails the newest snapshot.
+const soundDelay = () => mode === 'online' ? NET_DELAY / 60 : 0.015;
+function listen(st) {
+  const delay = soundDelay();
+  const count = Math.ceil(st.phase_ticks / 60), broken = st.objects.map(o => o.hp === 0);
+  const now = { phase: st.phase, count, actions: st.fighters.map(f => f.action), frames: st.fighters.map(f => f.frame), hp: st.fighters.map(f => f.hp), broken };
+  const was = heard; heard = now;
+  if (!was) { if (st.phase === 0) sfx.play('beep'); return; }
+  if (st.phase === 0 && (was.phase !== 0 || count !== was.count)) sfx.play('beep');
+  if (st.phase === 1 && was.phase === 0) { sfx.play('beep', { high: true }); sfx.play('bell'); }
+  if (st.phase === 2 && was.phase === 1) sfx.play('bell', { times: 2, delay });
+  if (st.phase === 3 && was.phase !== 3) { sfx.play('bell', { times: 3, delay }); sfx.play('jingle', { won: st.winner === side, delay: 1.3 }); }
+  for (let i = 0; i < 2; i++) {
+    const a = st.fighters[i].action, f = st.fighters[i];
+    const started = ATTACKS.has(a) && (a !== was.actions[i] || f.frame < was.frames[i]);
+    if (started) sfx.play('whoosh', { weight: weightOf(a) - 0.1, delay });
+    if (f.hp === 0 && was.hp[i] > 0) sfx.play('knockout', { delay });
+  }
+  broken.forEach((b, i) => { if (b && !was.broken[i]) sfx.play('crash', { glass: i === 5 || i === 6, delay }); });
+  // The last seconds and low health open up the fight track.
+  const low = Math.min(...st.fighters.map(f => f.hp));
+  sfx.heat(st.phase === 1 ? Math.max((40 - low) / 40, st.remaining < 600 ? 0.7 : 0) : 0);
+}
+function eventSound(kind, attacker) {
+  const delay = soundDelay();
+  if (kind === 1) sfx.play('blow', { weight: weightOf(attacker), delay });
+  else if (kind === 2 || kind === 9) sfx.play('block', { delay });
+  else if (kind === 3) sfx.play('parry', { delay });
+  else if (kind === 4) sfx.play('shatterGuard', { delay });
+  else if (kind === 5) sfx.play('grab', { delay });
+  else if (kind === 6 || kind === 7) sfx.play('blow', { weight: 0.9, delay });
+  else if (kind === 8) { sfx.play('whoosh', { weight: 1, delay }); sfx.play('blow', { weight: 0.5, delay }); }
+  else if (kind === 10) sfx.play('slam', { delay });
 }
 
 // ---- State from the simulation ------------------------------------------------
@@ -361,9 +413,10 @@ function accept(next, isPaused = false) {
   state = next; paused = isPaused; lastSnapshot = performance.now();
   window.arenaRenderBytes = encoder.encode(JSON.stringify(state));
   if (!fighting()) return;
+  listen(state);
   if (wallRound !== state.round || state.tick < 5) { wallImpacts = [0, 0]; wallRound = state.round; }
   state.walls.forEach((wall, i) => {
-    if (wall.impacts > wallImpacts[i]) { eventUntil = performance.now() + 1100; text('combat-event', 'УДАР О СТЕНУ'); tone(1); haptic('heavy'); }
+    if (wall.impacts > wallImpacts[i]) { eventUntil = performance.now() + 1100; text('combat-event', 'УДАР О СТЕНУ'); sfx.play('slam', { delay: soundDelay() }); haptic('heavy'); }
     wallImpacts[i] = wall.impacts;
   });
   for (let i = 0; i < 2; i++) {
@@ -382,22 +435,30 @@ function accept(next, isPaused = false) {
   special.classList.toggle('charged', mine.meter >= 500);
   special.classList.toggle('breaker', breakerReady());
   relabel();
-  const label = paused ? 'СОПЕРНИК ПЕРЕПОДКЛЮЧАЕТСЯ' : state.phase === 0 ? String(Math.max(1, Math.ceil(state.phase_ticks / 60))) : state.phase === 2 ? (state.winner < 0 ? 'НИЧЬЯ' : state.winner === side ? 'ТВОЙ РАУНД' : 'РАУНД СОПЕРНИКА') : '';
+  const label = paused ? 'СОПЕРНИК ПЕРЕПОДКЛЮЧАЕТСЯ' : state.phase === 0 ? String(Math.max(1, Math.ceil(state.phase_ticks / 60))) : state.phase === 2 ? (state.winner < 0 ? 'НИЧЬЯ' : state.winner === side ? 'ТВОЙ РАУНД' : 'РАУНД СОПЕРНИКА')
+    : state.phase === 3 && !resultShown ? (state.winner < 0 ? 'НИЧЬЯ' : state.winner === side ? 'ПОБЕДА!' : 'ПОРАЖЕНИЕ') : '';
+  $('announcement').classList.toggle('final', state.phase === 3);
   text('announcement', label); show('announcement', !!label);
   if (state.event !== lastEvent) {
     lastEvent = state.event; eventUntil = performance.now() + 700;
     const labels = ['', 'ПОПАДАНИЕ', 'БЛОК', 'ПАРИРОВАНИЕ', 'ЗАЩИТА СЛОМАНА', 'ЗАХВАТ', 'КОНТРАТАКА', 'НАКАЗАНИЕ', 'ВЫХОД ИЗ КОМБО', 'ЗАХВАТ СОРВАН', 'БРОСОК'];
     const combo = state.fighters[1 - state.event_target].combo;
-    text('combat-event', (combo > 1 && ![2, 9, 10].includes(state.event_kind) ? combo + ' × СВЯЗКА · ' : '') + (labels[state.event_kind] || '')); tone(state.event_kind);
+    text('combat-event', (combo > 1 && ![2, 9, 10].includes(state.event_kind) ? combo + ' × СВЯЗКА · ' : '') + (labels[state.event_kind] || ''));
+    eventSound(state.event_kind, state.fighters[1 - state.event_target].action);
     haptic(state.event_kind === 2 ? 'light' : state.event_target === side ? 'heavy' : 'medium');
   }
   if (state.phase === 3) {
-    show('result'); show('controls', false); show('announcement', false); clearInput();
-    text('result-title', state.winner === side ? 'Твоя победа.' : 'Ещё не конец.');
+    if (!ended) {
+      // The banner first; the card slides in while the winner starts dancing.
+      ended = performance.now(); show('controls', false); show('training-mode', false); show('room-damage', false); clearInput();
+      clearTimeout(resultTimer);
+      resultTimer = setTimeout(() => { if (!ended) return; resultShown = true; show('announcement', false); show('hud', false); show('result'); requestAnimationFrame(layout); }, 2300);
+    }
+    text('result-title', state.winner === side ? 'Твоя победа!' : state.winner < 0 ? 'Ничья' : 'Ещё не конец');
     if (state.winner >= 0) showPicture('result-avatar', people[state.winner]);
     show('result-avatar', state.winner >= 0);
     text('result-score', state.score[side] + ' : ' + state.score[1 - side]);
-    text('result-copy', state.winner === side ? 'Тайминг решил. Повторим?' : 'Прочитай замах. Поймай момент. Возьми реванш.');
+    text('result-copy', state.winner === side ? 'Тайминг решил. Повторим?' : 'Прочитай замах, поймай момент — и возьми реванш.');
     $('rematch').disabled = !rematchPossible || rematchRequested;
   }
 }
@@ -439,7 +500,7 @@ function connect() {
         storage.set('pulse-session', m.resume); text('identity', m.user.name.toUpperCase()); text('connection', 'АРЕНА НА СВЯЗИ');
         // Signed in: the game now serves the photo (the opponent sees it too).
         Object.assign(me, { id: m.user.id, name: m.user.name, avatar: m.user.avatar || null });
-        showMe(); showMyCard(m.rating); resolve();
+        showMe(); showMyCard(m.rating); if (mode === 'lobby') showPeople([me, BOT]); resolve();
       } else if (m.type === 'queued') {
         screen('waiting'); text('waiting-title', 'Ищем соперника'); text('waiting-text', config.dev ? 'Ждём другого игрока. Открой вторую вкладку для проверки боя.' : 'Ждём другого игрока. Пока вспомни: захват проходит сквозь блок.'); show('room-share', false);
       } else if (m.type === 'room') {
@@ -625,7 +686,8 @@ $('notify').onclick = () => {
 };
 $('challenge-accept').onclick = () => { const code = $('challenge').dataset.code; show('challenge', false); if (mode === 'local') { local = null; } online({ type: 'join', code }); };
 $('challenge-close').onclick = () => show('challenge', false);
-$('sound').onclick = () => setSound(!sound); $('fight-sound').onclick = () => setSound(!sound);
+$('sound').onclick = cycleSound; $('fight-sound').onclick = cycleSound;
+setSound(SOUND_MODES.includes(prefs.get('pulse-sound')) ? prefs.get('pulse-sound') : 'all', false);
 $('fullscreen').onclick = toggleFullscreen;
 $('copy').onclick = async () => { try { await navigator.clipboard.writeText($('invite-link').value); toast('Ссылка скопирована.'); } catch { $('invite-link').select(); toast('Выделена ссылка — скопируй её.'); } };
 $('share').onclick = () => {
@@ -674,6 +736,7 @@ try {
   window.screen.orientation?.addEventListener?.('change', viewport); document.addEventListener('fullscreenchange', viewport);
   const [bytes, cfg] = await Promise.all([fetch('arena_combat.wasm').then(r => { if (!r.ok) throw Error('Нет боевого ядра. Запустите build-web.ps1.'); return r.arrayBuffer(); }), fetch('config.json').then(r => r.ok ? r.json() : config).catch(() => config)]);
   config = cfg; module = await WebAssembly.compile(bytes); accept(simulation(module).state());
+  loadCity();
   await loadRoster(); showMe(); showPeople([me, BOT]);
   // Fetch explicitly so missing WASM produces a readable loading error.
   const check = await fetch('some_game.wasm', { method: 'HEAD' }); if (!check.ok) throw Error('Нет 3D-сборки. Запустите build-web.ps1.');

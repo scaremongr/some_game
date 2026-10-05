@@ -1,6 +1,8 @@
 :root{
   color-scheme:dark;--cyan:#57f0ce;--coral:#ff7965;--gold:#e9bc73;--ink:#eef5f3;--muted:#80949f;--line:#ffffff15;
-  --st:max(env(safe-area-inset-top,0px),var(--tg-top,0px));--sb:max(env(safe-area-inset-bottom,0px),var(--tg-bottom,0px));
+  --st:max(env(safe-area-inset-top,0px),var(--tg-top,0px));
+  /* The system bar only: Telegram's own header buttons sit in the corners. */
+  --st0:max(env(safe-area-inset-top,0px),var(--tg-safe-top,0px));--sb:max(env(safe-area-inset-bottom,0px),var(--tg-bottom,0px));
   --sl:max(env(safe-area-inset-left,0px),var(--tg-left,0px));--sr:max(env(safe-area-inset-right,0px),var(--tg-right,0px));
   /* Action pad: big button, diamond radius, mini button, joystick ring. */
   --b:72px;--r:calc(var(--b) * .88);--m:calc(var(--b) * .64);--ring:124px;--pad-gap:18px;
@@ -40,9 +42,9 @@ h1 em{font-style:normal;color:var(--cyan)}
 .result-rating .delta{font-weight:900;margin-right:6px}.result-rating .up{color:var(--cyan)}.result-rating .down{color:var(--coral)}
 .result-rating .muted{color:var(--muted);font-weight:600}
 .result-rating .promo{display:block;margin-top:6px;color:var(--gold);font-size:14px}
-.brag{width:100%;min-height:48px;margin:6px 0 8px;border-radius:8px;border:0;font-weight:800;font-size:14px;color:#1a1206;background:linear-gradient(90deg,#f3cf8a,#e9a94f)}
+.brag{flex:1 1 100%;min-height:46px;border-radius:8px;border:0;font-weight:800;font-size:14px;color:#1a1206;background:linear-gradient(90deg,#f3cf8a,#e9a94f)}
 .brag:disabled{filter:grayscale(.6);opacity:.7}
-#notify{display:block;margin:10px auto 0;font-size:12px}
+#notify{display:block;margin:6px auto 0;font-size:12px}
 .challenge{position:absolute;z-index:8;left:50%;top:calc(var(--tg-top,0px) + 70px);transform:translateX(-50%);width:min(420px,92vw);display:flex;align-items:center;gap:12px;padding:12px 44px 12px 12px;background:#101d2bf5;border:1px solid #ff796566;border-radius:14px;box-shadow:0 12px 50px #000a;animation:vs-in .3s ease-out}
 .challenge.hidden{display:none}
 .challenge img{width:46px;height:46px;border-radius:50%;object-fit:cover;border:2px solid var(--coral);flex:0 0 auto}
@@ -96,7 +98,7 @@ input{width:100%;background:#07101c;border:1px solid var(--line);border-radius:5
 #hud{position:absolute;top:calc(var(--st) + 106px);left:max(5%,var(--sl));right:max(5%,var(--sr));display:flex;gap:24px;z-index:2;pointer-events:none}
 .fighter-info{flex:1;min-width:0;--accent:var(--cyan)}
 .fighter-info.coral{--accent:var(--coral)}
-.fighter-name{display:flex;justify-content:space-between;font-size:12px;font-weight:700;gap:12px;margin-bottom:8px}
+.fighter-name{display:flex;justify-content:space-between;font-size:12px;font-weight:700;gap:12px;margin-bottom:8px;text-shadow:0 1px 3px #000,0 0 8px #000c}
 .fighter-name span:first-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .who{display:flex;align-items:center;gap:7px;min-width:0}
 .who span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -117,7 +119,6 @@ input{width:100%;background:#07101c;border:1px solid var(--line);border-radius:5
 @keyframes vs-slide{from{transform:translateX(-40vmin);opacity:0}to{transform:none;opacity:1}}
 @keyframes vs-slide-r{from{transform:translateX(40vmin);opacity:0}to{transform:none;opacity:1}}
 @keyframes vs-pop{from{transform:scale(2.4);opacity:0}to{transform:none;opacity:1}}
-.result-avatar{display:block;width:84px;height:84px;margin:14px auto 4px;border-radius:50%;object-fit:cover;border:3px solid var(--gold);box-shadow:0 0 30px #e9bc7355}
 .fighter-name span:last-child{color:var(--accent);white-space:nowrap}
 .health-track{height:12px;background:#ffffff12;transform:skewX(-12deg);overflow:hidden;box-shadow:inset 0 0 0 1px #ffffff10}
 .health-track div{height:100%;background:var(--accent);width:100%;transition:width .12s}
@@ -145,6 +146,7 @@ body:not(.fighting) #combo-readout{display:none}
 #training-mode{border-color:#57f0ce66;color:var(--cyan)}
 #room-damage{color:#e6c9a2;border-color:#d5ad7044}
 #fight-sound.on{color:var(--cyan);border-color:#57f0ce66}
+#fight-sound.muted{color:#5d6d77;text-decoration:line-through}
 #fight-tip{position:absolute;bottom:calc(var(--sb) + 18px);left:0;right:0;text-align:center;font-size:9px;letter-spacing:1px;color:var(--muted);pointer-events:none}
 
 /* Controls: floating joystick on the left, action diamond on the right. */
@@ -189,7 +191,7 @@ body.touch.fighting .topbar{display:none}
 body.touch.fighting #hud{top:calc(var(--st) + 8px);left:calc(var(--sl) + 12px);right:calc(var(--sr) + 12px);gap:10px}
 body.touch.fighting #fight-tools{top:calc(var(--st) + 66px);bottom:auto;left:calc(var(--sl) + 10px);right:calc(var(--sr) + 10px)}
 body.touch #fight-tip,body.touch.fighting .hp-label{display:none}
-body.touch.fighting #toast{top:calc(var(--st) + 118px)}
+body.touch.fighting #toast{top:calc(var(--st) + 118px);font-size:11px;padding:9px 14px;max-width:min(86%,320px)}
 body.touch.portrait{--b:min(21vw,84px);--ring:min(33vw,136px);--pad-gap:14px}
 body.touch.portrait .fighter-name{font-size:10px;gap:4px;margin-bottom:6px}
 body.touch.portrait .round-info{min-width:46px}
@@ -201,7 +203,7 @@ body.touch.portrait #announcement{font-size:30px;top:25%}
 body.touch.portrait #combat-event{top:31%;font-size:11px}
 body.touch.portrait #combo-readout{font-size:12px;top:21%}
 body.touch.landscape{--b:min(17.5vh,82px);--ring:min(30vh,140px);--pad-gap:max(12px,2.2vh)}
-body.touch.landscape.fighting #hud{left:calc(var(--sl) + 18%);right:calc(var(--sr) + 18%);top:calc(var(--st) + 6px)}
+body.touch.landscape.fighting #hud{left:calc(var(--sl) + max(19%,130px));right:calc(var(--sr) + max(19%,130px));top:calc(var(--st0) + 6px)}
 body.touch.landscape.fighting #fight-tools{top:calc(var(--st) + 6px)}
 body.touch.landscape.fighting #fight-tools .tool{height:30px;min-width:34px}
 body.touch.landscape.fighting #fight-tools .chip{position:absolute;top:38px;height:26px}
@@ -217,9 +219,32 @@ body.touch.landscape #announcement{font-size:30px;top:30%}
 body.touch.landscape #combo-readout{top:24%;font-size:12px}
 body.touch.landscape .stick-hint{display:none}
 body.touch.landscape #stick{width:40%;height:70%}
+body.touch.landscape .result-sheet{width:min(560px,calc(100% - 24px));bottom:calc(var(--sb) + 8px);padding:10px 14px}
+body.touch.landscape .result-sheet p{display:none}
+body.touch.landscape .result-avatar{width:40px;height:40px}
+body.touch.landscape .result-sheet h2{font-size:20px}
+body.touch.landscape .result-score{font-size:28px}
+body.touch.landscape .result-rating{font-size:13px;margin:4px 0 0}
+body.touch.landscape .result-actions{margin-top:8px;flex-wrap:nowrap}
+body.touch.landscape .result-actions>*{flex:1 1 0;min-height:40px;padding:8px 10px;font-size:12px}
+/* The match is over: the final word is big and gold. */
+body.fighting #announcement.final{font-size:clamp(44px,9vmin,72px);top:20%;letter-spacing:5px;color:var(--gold);text-shadow:0 0 40px #e9bc7388,0 4px 24px #000}
 
-/* Result, help, toast, loader */
-.result-score{font-size:65px;font-weight:900;color:var(--cyan);letter-spacing:6px}
+/* Match end: a card at the bottom; the winner dances above it. */
+.result-sheet{position:absolute;z-index:6;left:50%;bottom:calc(var(--sb) + 12px);transform:translateX(-50%);width:min(480px,calc(100% - 24px));max-height:calc(100% - var(--st) - 24px);overflow:auto;padding:16px 18px 14px;background:#0c1827eb;border:1px solid #69879455;border-radius:16px;box-shadow:0 14px 50px #000a;backdrop-filter:blur(14px);animation:sheet-in .45s cubic-bezier(.2,.9,.3,1.1)}
+@keyframes sheet-in{from{transform:translate(-50%,40px);opacity:0}to{transform:translateX(-50%);opacity:1}}
+.result-head{display:flex;align-items:center;gap:12px}
+.result-avatar{width:52px;height:52px;flex:0 0 auto;border-radius:50%;object-fit:cover;border:3px solid var(--gold);box-shadow:0 0 22px #e9bc7355}
+.result-text{flex:1;min-width:0}
+.result-sheet h2{font-size:24px;margin:4px 0 0;letter-spacing:-.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.result-score{font-size:36px;font-weight:900;color:var(--cyan);letter-spacing:2px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.result-sheet p{font-size:12px;line-height:1.5;color:#91a5b3;margin:8px 0 0}
+.result-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.result-actions .primary{flex:1 1 55%;min-height:48px;margin:0}
+.result-actions .secondary{flex:1 1 30%;margin:0;padding:12px}
+#announcement.final{animation:vs-pop .5s cubic-bezier(.2,1.6,.4,1)}
+
+/* Help, toast, loader */
 .panel .primary{margin-top:18px}
 dialog{width:min(460px,92vw);max-height:90%;overflow:auto;touch-action:pan-y;background:#101d2b;color:var(--ink);border:1px solid #59798550;border-radius:15px;padding:28px}
 dialog::backdrop{background:#02060dd9;backdrop-filter:blur(8px)}
@@ -243,6 +268,25 @@ dialog h2{font-size:32px}
   .play-card{left:5%;right:5%;bottom:calc(var(--sb) + 22px);width:auto;padding:16px}.card-top{margin-bottom:11px;font-size:9px}.primary{min-height:49px;font-size:13px}
   .secondary-row button{font-size:10px;min-height:43px}.micro{font-size:9px;margin:12px 0 1px}.play-card>.text-button{padding:8px}.arena-caption{display:none}
   #hud{top:calc(var(--st) + 84px);gap:12px}.panel{padding:24px}
+  /* The fighters stand between the title and the card. */
+  .intro{top:calc(var(--st) + 80px)}.intro h1{font-size:36px;margin:8px 0 0}.intro p{display:none}.play-card .micro{display:none}
+}
+/* Phone held sideways: the card fills the right side, the fighters the left. */
+@media(max-height:520px){
+  body.landscape .topbar{height:44px;gap:14px}
+  body.landscape .brand{font-size:17px}body.landscape .brand-icon{font-size:26px}
+  body.landscape #connection,body.landscape .brand-sub{display:none}
+  body.landscape .intro{top:auto;bottom:calc(var(--sb) + 14px);left:calc(var(--sl) + 22px)}
+  body.landscape .intro .eyebrow,body.landscape .intro p{display:none}
+  body.landscape .intro h1{font-size:26px;letter-spacing:-1px;margin:0;text-shadow:0 2px 14px #000}
+  body.landscape .play-card{top:calc(var(--st) + 6px);bottom:calc(var(--sb) + 6px);right:calc(var(--sr) + 12px);width:330px;padding:12px 14px;overflow:auto;display:flex;flex-direction:column;justify-content:center}
+  body.landscape .play-card .micro{display:none}
+  body.landscape .card-top{margin-bottom:8px}
+  body.landscape .fighter{flex-basis:56px;height:70px}
+  body.landscape .fighter-pick{margin-bottom:8px}
+  body.landscape .play-card .primary{min-height:44px;padding:10px 16px}
+  body.landscape .secondary-row button{min-height:40px;padding:8px}
+  body.landscape .text-row button{padding:6px 10px}
 }
 @media(max-height:580px) and (min-width:701px){
   .topbar{height:55px}.intro{top:19%}.intro h1{font-size:44px;margin:12px 0}.intro p{font-size:11px}.play-card{bottom:5%;padding:16px;width:320px}.arena-caption{display:none}

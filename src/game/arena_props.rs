@@ -35,13 +35,14 @@ struct Part {
 struct RoomData {
     textures: Vec<TextureData>,
     materials: Vec<MaterialData>,
-    fixed: Vec<(MeshData, Vec3)>,
+    fixed: Vec<(MeshData, Vec3, bool)>,
     /// Pieces grouped by owner: mesh, part indices (joint order), glass.
     batches: Vec<(MeshData, Vec<usize>, bool)>,
 }
 struct Room {
     data: Option<RoomData>,
-    fixed: Vec<(SkinnedMesh, Vec3)>,
+    /// Fixed meshes; `true` marks the stand-in city behind the windows.
+    fixed: Vec<(SkinnedMesh, Vec3, bool)>,
     batches: Vec<(SkinnedMesh, Vec<usize>, bool)>,
 }
 pub struct ArenaProps {
@@ -55,6 +56,8 @@ pub struct ArenaProps {
     wall_impacts: [u32; 2],
     /// Newly broken objects: centre and layout kind (10 for side walls).
     breaks: Vec<(Vec3, u32)>,
+    /// The painted city (scenery.rs) replaces the baked one.
+    pub hide_city: bool,
 }
 impl ArenaProps {
     pub fn new() -> Self {
@@ -67,6 +70,7 @@ impl ArenaProps {
             shake: [0.0; 2],
             wall_impacts: [0; 2],
             breaks: Vec::new(),
+            hide_city: false,
         };
         let stone = vec3(0.24, 0.29, 0.32);
         let metal = vec3(0.08, 0.11, 0.14);
@@ -293,7 +297,7 @@ impl ArenaProps {
             };
             let owner = rest.get(0..2).and_then(|s| s.parse::<usize>().ok()).filter(|&o| o < 22);
             let Some(owner) = owner.filter(|&o| o >= 5) else {
-                fixed.push((node.mesh, node.position));
+                fixed.push((node.mesh, node.position, node.name.contains("city")));
                 continue;
             };
             let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
@@ -370,6 +374,17 @@ impl ArenaProps {
                 Mat4::from_trs(p.position + wobble, Quat::IDENTITY, size)
             }
         }
+    }
+    /// Where a point resting on room object `owner` has been carried: the
+    /// motion of the piece nearest to it (None: no such object).
+    pub fn piece_motion(&self, owner: usize, point: Vec3) -> Option<Mat4> {
+        let part = self
+            .parts
+            .iter()
+            .filter(|p| p.owner == owner && p.piece)
+            .min_by(|a, b| (a.position - point).length().total_cmp(&(b.position - point).length()))?;
+        part.fragment.as_ref()?;
+        Some(self.part_matrix(part, false) * Mat4::translation(vec3(-part.position.x, -part.position.y, -part.position.z)))
     }
     pub fn reset(&mut self) {
         for p in &mut self.parts {
@@ -525,7 +540,7 @@ impl ArenaProps {
                 room.fixed = data
                     .fixed
                     .iter()
-                    .map(|(mesh, at)| (g.upload_shared(mesh, &data.materials, &textures), *at))
+                    .map(|(mesh, at, city)| (g.upload_shared(mesh, &data.materials, &textures), *at, *city))
                     .collect();
                 room.batches = data
                     .batches
@@ -534,7 +549,10 @@ impl ArenaProps {
                     .collect();
             }
             let room = self.room.as_ref().unwrap();
-            for (mesh, at) in &room.fixed {
+            for (mesh, at, city) in &room.fixed {
+                if *city && self.hide_city {
+                    continue;
+                }
                 g.draw_baked(mesh, &[Mat4::translation(*at)], camera, EXPOSURE, None, 0.0);
             }
             // Opaque pieces first, glass blended over them.

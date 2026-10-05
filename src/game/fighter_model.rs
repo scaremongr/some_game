@@ -49,7 +49,16 @@ enum Clip {
     Knockout,
     Victory,
     Defeat,
+    /// The match is won: the winner turns to the camera and dances.
+    Dance,
 }
+
+/// Dance takes, played one after another while the winner celebrates.
+const DANCES: [&str; 5] = ["dance", "dance2", "dance3", "dance4", "dance5"];
+/// Seconds of the match end before the winner starts dancing.
+const DANCE_AFTER: f32 = 2.6;
+/// Body turn while dancing: nearly facing the camera.
+const DANCE_YAW: f32 = 0.3;
 
 /// Per-frame facts the scene knows and the fighter state does not.
 pub struct View {
@@ -192,6 +201,8 @@ enum Travel {
     /// standing height (weight 1) so the root arc is not doubled; lower
     /// weights let the clip's own fall reach the floor.
     Air(f32),
+    /// Dances: small sways kept, travel capped at 30 cm.
+    Sway,
 }
 
 /// Physical recoil layered on captured poses: impulses from hits, blocks and
@@ -246,6 +257,11 @@ struct Side {
     ragdoll: Ragdoll,
     /// Room directions into this body's space (placement without the origin).
     to_body: Mat4,
+    /// Dancing: which take of `DANCES` plays, since when (clip time), and
+    /// how far the body has turned to the camera (0..1).
+    dance: usize,
+    dance_start: f32,
+    turn: f32,
 }
 impl Side {
     fn new() -> Side {
@@ -278,6 +294,9 @@ impl Side {
             block_clock: f32::MAX,
             ragdoll: Ragdoll::default(),
             to_body: Mat4::IDENTITY,
+            dance: 0,
+            dance_start: 0.0,
+            turn: 0.0,
         }
     }
 }
@@ -635,7 +654,11 @@ impl FighterModel {
             return Clip::Knockout;
         }
         if view.phase >= 2 && view.winner >= 0 && view.phase_time > 0.7 {
-            return if view.winner as usize == side {
+            let won = view.winner as usize == side;
+            if won && view.phase == 3 && view.phase_time > DANCE_AFTER {
+                return Clip::Dance;
+            }
+            return if won {
                 Clip::Victory
             } else {
                 Clip::Defeat
@@ -747,6 +770,11 @@ impl FighterModel {
                 1 => pick(&["defeat2", "defeat"]),
                 _ => pick(&["defeat"]),
             },
+            Clip::Dance => {
+                let n = DANCES.len();
+                let start = self.sides[side].dance;
+                (0..n).map(|i| DANCES[(start + i) % n]).find(|k| has(k)).or_else(|| pick(&["victory3", "victory"]))
+            }
             _ => None,
         }
     }
@@ -760,6 +788,7 @@ impl FighterModel {
             (_, Clip::Down(_)) => 0.08,
             (_, Clip::Knockout) => 0.06,
             (_, Clip::Victory) | (_, Clip::Defeat) => 0.35,
+            (_, Clip::Dance) => 0.6,
             _ => 0.12,
         }
     }
@@ -788,12 +817,29 @@ impl FighterModel {
                 Clip::Down(true) => previous.thrown,
                 _ => false,
             };
+            if clip == Clip::Dance {
+                let length = self
+                    .take_for(side, clip, 0.0, 0.0, 0.0, false, 0)
+                    .and_then(|k| Some(self.avatar(side).captured.as_ref()?.takes.get(k)?.duration));
+                let s = &mut self.sides[side];
+                if s.clip != Clip::Dance {
+                    // A different opening dance each match.
+                    s.dance = (view.time * 7.0) as usize % DANCES.len();
+                    s.dance_start = 0.0;
+                } else if length.is_some_and(|length| s.clip_time + view.dt - s.dance_start >= length) {
+                    // One dance after another; the take change cross-fades.
+                    s.dance += 1;
+                    s.dance_start = s.clip_time + view.dt;
+                }
+            }
             let take_key = self.take_for(side, clip, body.frame, (bodies[1 - side].x - body.x).abs(), jump_dir, thrown, view.variant);
             let dt = view.dt;
             let av = &self.avatars[self.which[side]];
             let s = &mut self.sides[side];
             s.jump_dir = jump_dir;
             s.thrown = thrown;
+            let turn = if clip == Clip::Dance { 1.0 } else { 0.0 };
+            s.turn += (turn - s.turn) * (dt * 2.5).min(1.0);
             let started = clip != s.clip;
             if started {
                 s.blend_len = Self::blend_time(s.clip, clip);
@@ -936,7 +982,7 @@ impl FighterModel {
                 // Without a captured clip the grip reads as a doubled-over reaction.
                 Clip::Held => lib.reaction(Reaction::Gut).pose(frame.min(12.0)),
                 Clip::Knockout => lib.ko.pose(clip_frames),
-                Clip::Victory => lib.victory.pose(clip_frames),
+                Clip::Victory | Clip::Dance => lib.victory.pose(clip_frames),
                 Clip::Defeat => lib.defeat.pose(clip_frames),
             };
             // The body meets the floor: dust where the back lands (when the
@@ -1171,6 +1217,7 @@ impl FighterModel {
                         }
                         Clip::Knockout => (take.marks.start + clip_frames / 60.0, Travel::Keep),
                         Clip::Victory | Clip::Defeat => (clip_frames / 60.0, Travel::InPlace),
+                        Clip::Dance => ((s.clip_time - s.dance_start).max(0.0), Travel::Sway),
                         Clip::Guard if key == "block" => (block_time, Travel::InPlace),
                         _ => ((view.time + side as f32 * 0.4).rem_euclid(take.duration.max(0.1)), Travel::InPlace),
                     };
@@ -1193,7 +1240,7 @@ impl FighterModel {
                 let hips_now = av.character.transform.transform_point(captured.lib.hips_at(clip_index, t));
                 let moved_in = vec3(hips_now.x - take.start_hips.x, 0.0, hips_now.z - take.start_hips.z);
                 let keep = match (clip, travel) {
-                    (_, Travel::InPlace | Travel::Air(_)) => 0.0,
+                    (_, Travel::InPlace | Travel::Air(_) | Travel::Sway) => 0.0,
                     (_, Travel::Keep) => 1.0,
                     (Clip::Attack(action), Travel::Return) => {
                         let m = moves::attack(action);
@@ -1215,6 +1262,12 @@ impl FighterModel {
                 };
                 let mut shift = match travel {
                     Travel::InPlace => vec3(-hips_now.x, 0.0, -hips_now.z),
+                    // Dances keep their sway but not their travel.
+                    Travel::Sway => {
+                        let away = moved_in.length();
+                        let keep = if away > 0.3 { moved_in * (0.3 / away) } else { moved_in };
+                        vec3(-hips_now.x, 0.0, -hips_now.z) + keep
+                    }
                     Travel::Air(w) => vec3(-hips_now.x, (take.stand_y - hips_now.y) * w, -hips_now.z),
                     _ => vec3(-take.start_hips.x, 0.0, -take.start_hips.z) - moved_in * (1.0 - keep),
                 };
@@ -1377,7 +1430,8 @@ impl FighterModel {
                 }
             }
             s.out_locals.clone_from(&self.pose);
-            let yaw = std::f32::consts::FRAC_PI_2 - CAMERA_TURN;
+            let turn = s.turn * s.turn * (3.0 - 2.0 * s.turn);
+            let yaw = (std::f32::consts::FRAC_PI_2 - CAMERA_TURN) * (1.0 - turn) + DANCE_YAW * turn;
             let flip = if mirrored { -1.0 } else { 1.0 };
             // Physical layer: hits, inertia, gravity on a loose body.
             s.to_body = (Mat4::from_trs(Vec3::ZERO, Quat::IDENTITY, vec3(flip, 1.0, 1.0))
@@ -1556,6 +1610,31 @@ mod tests {
                 assert!(model.skin[1].iter().all(|m| m.0.iter().all(|x| x.is_finite())), "action {action} frame {frame}");
             }
         }
+    }
+
+    #[test]
+    fn the_match_winner_turns_to_the_camera_and_dances_one_dance_after_another() {
+        let Ok(pack) = std::fs::read("assets/fight.pack") else { return };
+        let bytes = std::fs::read("assets/character.glb").unwrap();
+        let mut model = FighterModel::load(&bytes).unwrap();
+        model.set_captured(0, &pack).unwrap();
+        let game = arena_combat::Match::default();
+        let mut v = View { phase: 3, winner: 0, ..view() };
+        let mut seen = std::collections::BTreeSet::new();
+        for i in 0..(60 * 40) {
+            v.phase_time = i as f32 / 60.0;
+            v.time = v.phase_time;
+            model.update(&game.fighters, &bodies(&game.fighters, 0.0), &v);
+            if v.phase_time > DANCE_AFTER + 0.1 {
+                assert_eq!(model.sides[0].clip, Clip::Dance);
+                assert_eq!(model.sides[1].clip, Clip::Defeat);
+                seen.extend(model.sides[0].take.clone());
+            }
+            assert!(model.skin[0].iter().all(|m| m.0.iter().all(|x| x.is_finite())));
+        }
+        // Several dances played; the body has turned (nearly) to the camera.
+        assert!(seen.len() >= 3 && seen.iter().all(|k| k.starts_with("dance")), "{seen:?}");
+        assert!(model.sides[0].turn > 0.95 && model.sides[1].turn < 0.05);
     }
 
     #[test]

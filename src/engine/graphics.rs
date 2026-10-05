@@ -413,6 +413,36 @@ impl Graphics {
         self.ctx.apply_bindings(&self.bindings);
     }
 
+    /// A picture on a flat quad in the 3D scene (see `Renderer3D::draw_sprite`).
+    pub fn draw_sprite(&mut self, texture: miniquad::TextureId, model: Mat4, camera: &Camera, tint: [f32; 4], far: f32) {
+        self.flush();
+        let aspect = self.view.canvas.x / self.view.canvas.y;
+        self.r3d.draw_sprite(&mut *self.ctx, texture, model, camera, aspect, tint, far);
+        self.ctx.apply_pipeline(&self.pipeline);
+        self.ctx.apply_bindings(&self.bindings);
+    }
+
+    /// An RGBA8 picture for `draw_sprite`: linear filtering, clamped edges.
+    pub fn upload_rgba(&mut self, width: u32, height: u32, rgba: &[u8]) -> miniquad::TextureId {
+        self.ctx.new_texture_from_data_and_format(
+            rgba,
+            TextureParams {
+                format: TextureFormat::RGBA8,
+                wrap: TextureWrap::Clamp,
+                min_filter: FilterMode::Linear,
+                mag_filter: FilterMode::Linear,
+                mipmap_filter: MipmapFilterMode::None,
+                width,
+                height,
+                ..Default::default()
+            },
+        )
+    }
+
+    pub fn delete_texture(&mut self, texture: miniquad::TextureId) {
+        self.ctx.delete_texture(texture);
+    }
+
     pub fn text(&mut self, s: &str, pos: Vec2, scale: f32, color: Color) {
         let mut pen = pos.x;
         for ch in s.chars() {

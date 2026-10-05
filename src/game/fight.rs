@@ -7,6 +7,7 @@ use super::{
     anims::Reaction,
     arena_props::ArenaProps,
     effects::Effects,
+    scenery::Scenery,
     fighter_model::{FighterModel, View},
     ragdoll::Part,
     timeline::{Body, Timeline},
@@ -36,7 +37,8 @@ extern "C" {
     fn fight_debug_camera(out: *mut f32) -> i32;
     /// Continuous render tick from the page (negative: show the newest state).
     fn fight_clock() -> f64;
-    /// Screen band free of HUD and touch controls: top, bottom (0..1 from top).
+    /// Screen area free of HUD and touch controls: top, bottom (0..1 from
+    /// the top), left, right (0..1 from the left).
     fn fight_layout(out: *mut f32) -> i32;
     /// Fighter assets per side as UTF-8 lines: model, pack, model, pack.
     fn fight_fighters(ptr: *mut u8, capacity: usize) -> usize;
@@ -93,6 +95,8 @@ pub struct FightScene {
     /// Sides already showing the requested fighter, as last told to the page.
     avatars_ready: i32,
     props: ArenaProps,
+    /// The city behind the windows and photos on screens (from the page).
+    scenery: Scenery,
     effects: Effects,
     time: f32,
     last_draw: f64,
@@ -118,10 +122,12 @@ pub struct FightScene {
     phase_time: f32,
     trails: [Vec<(Vec3, f32)>; 2],
     debug_camera: Option<[f32; 8]>,
-    layout: [f32; 2],
+    layout: [f32; 4],
     /// Seconds of knockout slow motion left, and who has been seen KO'd.
     slowmo: f32,
     knocked: [bool; 2],
+    /// 0..1: the camera has moved in on the dancing winner.
+    celebrate: f32,
 }
 
 impl FightScene {
@@ -155,6 +161,7 @@ impl FightScene {
             ],
             avatars_ready: -1,
             props: ArenaProps::new(),
+            scenery: Scenery::new(),
             effects: Effects::new(),
             time: 0.0,
             last_draw: miniquad::date::now(),
@@ -181,9 +188,10 @@ impl FightScene {
             phase_time: 0.0,
             trails: [vec![], vec![]],
             debug_camera: None,
-            layout: [0.16, 0.95],
+            layout: [0.16, 0.95, 0.0, 1.0],
             slowmo: 0.0,
             knocked: [false; 2],
+            celebrate: 0.0,
         }
     }
 
@@ -200,6 +208,7 @@ impl FightScene {
             self.wall_impacts = [0; 2];
             self.last_event = state.event;
             self.reaction = [Reaction::Head; 2];
+            self.celebrate = 0.0;
             if let Some(model) = &mut self.model {
                 model.reset();
             }
@@ -520,18 +529,31 @@ impl FightScene {
 
     fn camera(&mut self, canvas: Vec2, dt: f32) -> Camera {
         let aspect = canvas.x / canvas.y;
-        let [top, bottom] = self.layout;
+        let [top, bottom, left, right] = self.layout;
         let band = (bottom - top).clamp(0.3, 1.0);
+        let across = (right - left).clamp(0.3, 1.0);
         let tan = (FOV * 0.5).tan();
         let xs = [self.bodies[0].x, self.bodies[1].x];
         let margin = if aspect < 1.0 { 1.5 } else { 1.9 };
         let span = (xs[1] - xs[0]).abs() + margin;
-        let by_width = span / (2.0 * tan * aspect);
+        let by_width = span / (2.0 * tan * aspect * across);
         let by_height = 2.3 / (2.0 * tan * band);
-        let wanted = by_width.max(by_height).max(4.2) * (1.0 - 0.05 * self.punch);
+        let mut wanted = by_width.max(by_height).max(4.2) * (1.0 - 0.05 * self.punch);
+        let mut center = (xs[0] + xs[1]) * 0.5;
+        // Match over: the camera eases in on the winner's dance.
+        let winner = self.state.winner;
+        let dancing = self.state.phase == 3 && winner >= 0 && self.phase_time > 2.2 && !self.preview();
+        self.celebrate += (f32::from(u8::from(dancing)) - self.celebrate) * (1.0 - (-dt * 1.2).exp());
+        let c = self.celebrate * self.celebrate * (3.0 - 2.0 * self.celebrate);
+        if c > 0.0 {
+            let x = self.bodies[winner.clamp(0, 1) as usize].x;
+            center += (x - center) * c;
+            // A dancer needs no room for jumps: frame the body, not 2.3 m.
+            wanted += ((by_height * 0.8).max(3.2) - wanted) * c;
+        }
         let k = 1.0 - (-dt * 7.0).exp();
         self.view_distance += (wanted - self.view_distance) * k;
-        self.view_center += ((xs[0] + xs[1]) * 0.5 - self.view_center) * (1.0 - (-dt * 10.0).exp());
+        self.view_center += (center - self.view_center) * (1.0 - (-dt * 10.0).exp());
         let lift = (self.bodies[0].y.max(self.bodies[1].y) * 0.35).min(0.5);
         self.view_lift += (lift - self.view_lift) * (1.0 - (-dt * 5.0).exp());
         let d = self.view_distance;
@@ -541,15 +563,16 @@ impl FightScene {
             0.0,
         );
         let target = vec3(self.view_center, 0.92 + self.view_lift, 0.0);
+        let orbit = vec3((self.time * 0.4).sin() * 0.7 * c, 0.0, 0.0);
         let mut camera = Camera {
-            eye: target + vec3(0.0, d * 0.13, d) + shake,
+            eye: target + vec3(0.0, d * 0.13, d) + shake + orbit,
             target: target + shake * 0.5,
             fov_y: FOV,
             near: 0.1,
             far: 100.0,
             // The floor line sits near the bottom of the free band; the rest
             // of the band shows the fighters and the room above them.
-            shift: vec2(0.0, 1.0 - 2.0 * (top + 0.9 * band) + 0.92 / (d * tan)),
+            shift: vec2(left + right - 1.0, 1.0 - 2.0 * (top + 0.9 * band) + 0.92 / (d * tan)),
         };
         if let Some(c) = self.debug_camera {
             camera.eye = vec3(c[0], c[1], c[2]);
@@ -811,12 +834,18 @@ impl Scene for FightScene {
             if let Some(model) = &mut self.model {
                 model.review = (debug && cam[8] >= 0.0).then(|| (cam[8] as usize, cam[9].max(0.0)));
             }
-            let mut layout = [0.0f32; 2];
+            let mut layout = [0.0f32, 0.0, 0.0, 1.0];
             if unsafe { fight_layout(layout.as_mut_ptr()) } == 1
                 && layout[1] > layout[0]
+                && layout[3] > layout[2]
                 && layout.iter().all(|v| v.is_finite())
             {
-                self.layout = [layout[0].clamp(0.0, 0.9), layout[1].clamp(0.1, 1.0)];
+                self.layout = [
+                    layout[0].clamp(0.0, 0.9),
+                    layout[1].clamp(0.1, 1.0),
+                    layout[2].clamp(0.0, 0.7),
+                    layout[3].clamp(0.3, 1.0),
+                ];
             }
             let clock = unsafe { fight_clock() };
             if self.preview() || clock < 0.0 {
@@ -863,7 +892,11 @@ impl Scene for FightScene {
                 ..Lighting::default()
             }
         };
+        self.scenery.update(g);
+        self.props.hide_city = self.scenery.has_city();
+        self.scenery.draw_backdrop(g, &camera);
         self.props.draw(g, &self.state, &camera, &lighting);
+        self.scenery.draw_screens(g, &camera, &self.props);
         if let Some(model) = &mut self.model {
             model.upload(g);
             for i in 0..2 {

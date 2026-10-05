@@ -21,11 +21,11 @@ miniquad_add_plugin({name:'pulse-arena',version:1,register_plugin(imports){
   imports.env.fight_clock = function() {
     return typeof window.arenaClock === 'function' ? window.arenaClock() : -1;
   };
-  // Screen band left free by HUD and touch controls: [top, bottom] in 0..1.
+  // Screen area left free by HUD and controls: [top, bottom, left, right] in 0..1.
   imports.env.fight_layout = function(ptr) {
     const band = window.arenaLayout;
     if (!band || band.length < 2) return 0;
-    new Float32Array(wasm_memory.buffer, ptr, 2).set(band);
+    new Float32Array(wasm_memory.buffer, ptr, 4).set(band.length >= 4 ? band.slice(0, 4) : [band[0], band[1], 0, 1]);
     return 1;
   };
   // Fighter bodies per side (window.arenaFighters: [{model, pack}, {model, pack}])
@@ -38,6 +38,19 @@ miniquad_add_plugin({name:'pulse-arena',version:1,register_plugin(imports){
     if (fightersBytes.length > capacity) return 0;
     new Uint8Array(wasm_memory.buffer, ptr, fightersBytes.length).set(fightersBytes);
     return fightersBytes.length;
+  };
+  // Pictures for the room (web/scenery.js): [version, width, height], then pixels.
+  imports.env.fight_image_info = function(slot, ptr) {
+    const image = window.arenaImages?.[slot];
+    if (!image) return 0;
+    new Int32Array(wasm_memory.buffer, ptr, 3).set([image.version, image.width, image.height]);
+    return 1;
+  };
+  imports.env.fight_image_copy = function(slot, ptr, capacity) {
+    const image = window.arenaImages?.[slot];
+    if (!image || image.data.length > capacity) return 0;
+    new Uint8Array(wasm_memory.buffer, ptr, image.data.length).set(image.data);
+    return image.data.length;
   };
   imports.env.fight_read = function(ptr, capacity) {
     const bytes = window.arenaRenderBytes;

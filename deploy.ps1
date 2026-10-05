@@ -16,9 +16,11 @@ $releaseRoom = Join-Path $releaseRoot 'dist/assets/room.glb'
 if (Test-Path -LiteralPath $releaseRoom) { Copy-Item -LiteralPath $releaseRoom -Destination (Join-Path $releaseStage 'dist/assets/room.glb') }
 $releaseBot = Join-Path $releaseRoot 'dist/assets/bot'
 if (Test-Path -LiteralPath $releaseBot) { Copy-Item -LiteralPath $releaseBot -Destination (Join-Path $releaseStage 'dist/assets') -Recurse }
+$releaseBackdrop = Join-Path $releaseRoot 'dist/assets/backdrop'
+if (Test-Path -LiteralPath $releaseBackdrop) { Copy-Item -LiteralPath $releaseBackdrop -Destination (Join-Path $releaseStage 'dist/assets') -Recurse }
 $releaseFighters = Join-Path $releaseRoot 'dist/assets/fighters'
 if (Test-Path -LiteralPath $releaseFighters) { Copy-Item -LiteralPath $releaseFighters -Destination (Join-Path $releaseStage 'dist/assets') -Recurse }
-foreach ($file in @('index.html','gl.js','audio.js','pose.js','bridge.js','arena.js','arena.css','combat.js','some_game.wasm','arena_combat.wasm')) {
+foreach ($file in @('index.html','gl.js','audio.js','pose.js','bridge.js','arena.js','arena.css','combat.js','scenery.js','sound.js','some_game.wasm','arena_combat.wasm')) {
     Copy-Item -LiteralPath (Join-Path $releaseRoot "dist/$file") -Destination (Join-Path $releaseStage 'dist')
 }
 foreach ($file in @('index.mjs','auth.mjs','bot.mjs','league.mjs','deploy-probe.mjs')) {

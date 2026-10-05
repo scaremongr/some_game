@@ -17,6 +17,7 @@ pub mod fighter_model;
 pub mod mocap;
 pub mod ragdoll;
 pub mod arena_props;
+pub mod scenery;
 pub mod timeline;
 
 use crate::engine::math::Color;

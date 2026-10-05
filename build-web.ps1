@@ -13,7 +13,7 @@ try {
     $ErrorActionPreference = 'Stop'
     $arenaDist = Join-Path $arenaRoot 'dist'
     New-Item -ItemType Directory -Force -Path $arenaDist | Out-Null
-    foreach ($file in @('index.html','gl.js','audio.js','pose.js','bridge.js','arena.js','arena.css','combat.js')) {
+    foreach ($file in @('index.html','gl.js','audio.js','pose.js','bridge.js','arena.js','arena.css','combat.js','scenery.js','sound.js')) {
         Copy-Item -LiteralPath (Join-Path $arenaRoot "web/$file") -Destination $arenaDist -Force
     }
     Copy-Item -LiteralPath (Join-Path $arenaRoot "target/wasm32-unknown-unknown/$profileName/some_game.wasm") -Destination $arenaDist -Force
@@ -27,6 +27,12 @@ try {
     if (Test-Path -LiteralPath $botArt) {
         New-Item -ItemType Directory -Force -Path (Join-Path $arenaDist 'assets/bot') | Out-Null
         Copy-Item -Path (Join-Path $botArt '*.jpg') -Destination (Join-Path $arenaDist 'assets/bot') -Force
+    }
+    # The night city behind the windows (tools/backdrop/city.py).
+    $backdrop = Join-Path $arenaRoot 'assets/backdrop'
+    if (Test-Path -LiteralPath $backdrop) {
+        New-Item -ItemType Directory -Force -Path (Join-Path $arenaDist 'assets/backdrop') | Out-Null
+        Copy-Item -Path (Join-Path $backdrop '*') -Include '*.jpg', '*.png' -Destination (Join-Path $arenaDist 'assets/backdrop') -Force
     }
     $room = Join-Path $arenaRoot 'assets/room.glb'
     if (Test-Path -LiteralPath $room) { Copy-Item -LiteralPath $room -Destination (Join-Path $arenaDist 'assets/room.glb') -Force }

@@ -55,13 +55,14 @@ Principles:
 | `src/game/ragdoll.rs` | Physical layer over the animated pose: 18 joint particles (hips pinned to the animation, the rest damped springs around it), blows push the struck part, root acceleration is felt as inertia, loose parts sag, bone lengths and the floor are kept; bones are turned to follow. `Drive` per state: full control normally, loose limbs in flight and knockdowns, limp after a KO. Cosmetic. |
 | `src/game/arena_props.rs` | The room: baked apartment from `assets/room.glb` (pieces `oNN_kkk` belong to combat room object NN; `glassNN_kkk` panes; `s_*` fixed) or a box-room fallback; deterministic debris from snapshot ticks. |
 | `src/game/timeline.rs`, `effects.rs`, `camera.rs` | Interpolation of snapshots, particles/sparks, camera. |
+| `src/game/scenery.rs` | Pictures from the page in the room: the night city behind the windows (two layers at different depths → parallax; a dark mask continues the back wall so the city shows only in the openings) and the photos on the TV, the laptop (follows the broken desk piece) and the two bedroom canvases. Screen rectangles were measured in Blender on the built room. |
 | `src/game/dance.rs`, `dancer.rs`, `mirror.rs`, `clips.rs`, `menu.rs`, `rhythm.rs` | Legacy dance game scenes (run natively with args `dance`, `mirror`, `clips`). `dancer.rs` also holds `Character` used by the fight. |
 | `src/bin/fightpack.rs` | Packs Mixamo clips into a fight pack, optionally retargeted onto a given fighter (`--character`). |
 | `src/bin/inspect.rs`, `beatmap.rs` | Model inspector; legacy dance tool. |
-| `web/` | `index.html` (all UI markup), `arena.js` (UI, input, WebSocket client, training loop, rating/leaderboard/card/revenge UI), `arena.css`, `bridge.js` (miniquad plugin: JS↔wasm imports), `gl.js` (**patched** miniquad loader), `combat.js` (loads `arena_combat.wasm` for Node and browser), `audio.js`, `pose.js` (legacy). |
+| `web/` | `index.html` (all UI markup), `arena.js` (UI, input, WebSocket client, training loop, rating/leaderboard/card/revenge UI), `arena.css`, `bridge.js` (miniquad plugin: JS↔wasm imports), `gl.js` (**patched** miniquad loader), `combat.js` (loads `arena_combat.wasm` for Node and browser), `sound.js` (WebAudio: synthesised effects + step-sequencer music, modes all/sfx/off), `scenery.js` (decodes the city layers, draws the TV/laptop/canvas pictures on canvases → `window.arenaImages`), `audio.js`, `pose.js` (legacy). |
 | `server/` | `index.mjs` (HTTP + WS server, rooms, sessions, clock), `auth.mjs` (Telegram initData HMAC/Ed25519), `bot.mjs` (Telegram bot), `league.mjs` (ratings, leagues, chat tables, JSON persistence), `deploy-probe.mjs` (post-deploy check run inside the container), `*.test.mjs` (node:test). |
 | `scripts/` | Build/test/deploy helpers: browser tests (Playwright), `pose-sheet.mjs`, `fight-video.mjs`, `tile-frames.mjs`, `fighter-portraits.mjs`, `bot-art.mjs`, `publish.py` + `install-server.py` (deploy), `sshconf.py`, `server-inspect.py`. |
-| `tools/` | Asset pipelines: Mixamo download/convert/pack, fighters import, room build/bake (`tools/room/`), `fetch-assets.py`, `set-game-bot-token.py`. |
+| `tools/` | Asset pipelines: Mixamo download/convert/pack, fighters import, room build/bake (`tools/room/`), the night city (`tools/backdrop/city.py` → `assets/backdrop/far.jpg`, `near.png`), `fetch-assets.py`, `set-game-bot-token.py`. |
 | `assets/` | Runtime assets copied into `dist/assets` by `build-web.ps1` (see §7 for what is in git). |
 | `assets-src/` | Heavy sources (Mixamo FBX/GLB, Poly Haven models/textures). Not in git; regenerable. |
 | `docs/` | Protocol, deployment notes, bot kit (pictures + BotFather steps), legacy docs. |
@@ -81,7 +82,10 @@ Principles:
   optional clip index/time for clip review), `fight_clock` (continuous render
   tick from `window.arenaClock`), `fight_layout` (free screen band),
   `fight_fighters` (model/pack per side from `window.arenaFighters`),
-  `fight_avatars` (which sides show the requested body), `fight_room_status`.
+  `fight_avatars` (which sides show the requested body), `fight_room_status`,
+  `fight_image_info`/`fight_image_copy` (page pictures for `scenery.rs`: version,
+  size, RGBA pixels per slot). `fight_layout` passes four numbers: the free
+  band top/bottom and left/right (the lobby frames the fighters beside the card).
 - **Smoothness**: rendering is at display rate; `arenaClock` gives a fractional
   tick; online play renders `NET_DELAY = 3.5` ticks behind the newest snapshot
   and interpolates. DPR is capped at 2 and lowered adaptively
@@ -114,7 +118,13 @@ Principles:
   hit_light (jab), hit_side (hook), hit_spin (counter hit), gut_big (side
   kick), stagger, dizzy, hit_wall, air_hit, air_down, thrown, thrown_down,
   swept, getup, ko, victory/victory2/victory3, defeat/defeat2 (picked by the
-  round number)`. Missing keys fall back to authored poses.
+  round number), dance…dance5 (the match winner, one after another; the sources
+  are Mixamo dances from the old dance game, copied as `assets-src/fight/glb/17x *.glb`)`.
+  Missing keys fall back to authored poses.
+- Match end (phase 3): the winner plays the victory take, then from
+  `DANCE_AFTER` turns to the camera (`DANCE_YAW`) and dances (`Clip::Dance`,
+  `Travel::Sway`: sway kept, travel capped at 30 cm); `fight.rs` eases the
+  camera in on the winner. The page shows a banner, then a non-blocking card.
 - Marks: strikes by the striking limb's reach (`strike_marks`, `Marks::fit`,
   max speed-up 2.5×); falls by hips height; jumps by feet contact; throw by
   first two-hand reach. Knockdown lasts `KNOCKDOWN = 56` ticks, a grip
@@ -256,6 +266,11 @@ npm run test:browser; npm run test:combat; npm run test:physics   # Playwright, 
 fresh machine.)
 
 Visual review tools (after `build-web.ps1`):
+- `node scripts/ui-shots.mjs [outDir] [lobby,fight,result]` — the page UI on a
+  phone in portrait and landscape inside an emulated Telegram fullscreen (safe
+  areas, header buttons drawn in). Look at it after any HUD or layout change.
+- `node scripts/sound-check.mjs` — renders every effect and music track offline
+  and prints peak/RMS (fails on silence or clipping). Ears still decide.
 - `node scripts/pose-sheet.mjs spec.json out` — contact sheet of arbitrary
   states; spec: `{shots:[{label, f0:{…fighter fields}, f1, x:[mmL,mmR],
   camera:[eye xyz, target xyz, fov, 1, clipIndex?, time?], state:{…}}],
@@ -327,6 +342,11 @@ full test suite passes**, then verify the live files match `dist/` (sha256 of
 Done: mocap animation for every state, 7 fighters, baked apartment arena with
 breakable furniture, mobile controls, Telegram bot, ratings/leagues,
 leaderboard, victory cards, revenge calls, chat tables, session takeover.
+
+The city behind the windows: `blender -b --factory-startup --python
+tools/backdrop/city.py -- --samples 256 --width 2560` (~1.5 min on an RTX 4090)
+writes `assets/backdrop/far.jpg` and `near.png`; our own procedural scene, so
+the images are in git. `BACKDROP_TAN_H/V` in `scenery.rs` must match the script.
 
 Open ideas: rollback netcode / input prediction (high ping is felt), daily
 quests and streaks, tournaments, cosmetics for Telegram Stars (betting Stars on
