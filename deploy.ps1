@@ -18,6 +18,8 @@ foreach ($roomFile in @('room.glb', 'room-hd.glb', 'room_detail.jpg')) {
 }
 $releaseBot = Join-Path $releaseRoot 'dist/assets/bot'
 if (Test-Path -LiteralPath $releaseBot) { Copy-Item -LiteralPath $releaseBot -Destination (Join-Path $releaseStage 'dist/assets') -Recurse }
+$releaseMusic = Join-Path $releaseRoot 'dist/assets/sound'
+if (Test-Path -LiteralPath $releaseMusic) { Copy-Item -LiteralPath $releaseMusic -Destination (Join-Path $releaseStage 'dist/assets') -Recurse }
 $releaseBackdrop = Join-Path $releaseRoot 'dist/assets/backdrop'
 if (Test-Path -LiteralPath $releaseBackdrop) { Copy-Item -LiteralPath $releaseBackdrop -Destination (Join-Path $releaseStage 'dist/assets') -Recurse }
 $releaseFighters = Join-Path $releaseRoot 'dist/assets/fighters'

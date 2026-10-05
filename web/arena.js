@@ -359,7 +359,8 @@ function setSound(next, announce = true) {
 }
 function cycleSound() { setSound(SOUND_MODES[(SOUND_MODES.indexOf(sfx.getMode()) + 1) % SOUND_MODES.length]); }
 let matchesPlayed = 0;
-function pickMusic() { sfx.music(fighting() ? (matchesPlayed % 2 ? 'brawl' : 'arcade') : 'lobby'); }
+// Fights rotate three tracks; the lobby has its own.
+function pickMusic() { sfx.music(fighting() ? 'fight' + (1 + (matchesPlayed + 2) % 3) : 'lobby'); }
 // What the last state sounded like: each new event makes its sound once.
 let heard = null;
 const HEAVY = new Set([2, 9, 10, 12, 13, 14, 18, 19]), MEDIUM = new Set([8, 11, 16, 17]);

@@ -169,10 +169,20 @@ export async function createArena(options = {}) {
       if (path === '/config.json') { res.setHeader('Content-Type','application/json'); res.setHeader('Cache-Control','no-store'); return res.end(JSON.stringify({dev, miniApp, protocol:3})); }
       const file = resolve(root, '.' + decodeURIComponent(path === '/' ? '/index.html' : path));
       if (!file.startsWith(root.endsWith(sep) ? root : root + sep)) { res.writeHead(403); return res.end(); }
-      const mime = {'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.wasm':'application/wasm','.glb':'model/gltf-binary','.pack':'application/octet-stream','.json':'application/json; charset=utf-8','.jpg':'image/jpeg','.png':'image/png'}[extname(file)];
+      const mime = {'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.wasm':'application/wasm','.glb':'model/gltf-binary','.pack':'application/octet-stream','.json':'application/json; charset=utf-8','.jpg':'image/jpeg','.png':'image/png','.mp3':'audio/mpeg'}[extname(file)];
       if (!mime) { res.writeHead(404); return res.end(); }
       const bytes = await readFile(file);
-      res.setHeader('Content-Type',mime); res.setHeader('Cache-Control','no-cache');
+      res.setHeader('Content-Type',mime); res.setHeader('Cache-Control','no-cache'); res.setHeader('Accept-Ranges','bytes');
+      // Byte ranges: Safari streams audio only from servers that serve them.
+      const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+      if (range && (range[1] || range[2])) {
+        let start = range[1] ? Number(range[1]) : bytes.length - Number(range[2]);
+        let end = range[1] && range[2] ? Math.min(Number(range[2]), bytes.length - 1) : bytes.length - 1;
+        start = Math.max(0, start);
+        if (start > end || start >= bytes.length) { res.writeHead(416, { 'Content-Range': `bytes */${bytes.length}` }); return res.end(); }
+        res.writeHead(206, { 'Content-Range': `bytes ${start}-${end}/${bytes.length}`, 'Content-Length': end - start + 1 });
+        return res.end(req.method === 'HEAD' ? undefined : bytes.subarray(start, end + 1));
+      }
       res.end(req.method === 'HEAD' ? undefined : bytes);
     } catch { res.writeHead(404); res.end('Not found'); }
   });

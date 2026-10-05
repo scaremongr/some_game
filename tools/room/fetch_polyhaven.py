@@ -28,7 +28,7 @@ MODELS = [
     "vintage_electric_kettle", "electric_stove", "classic_laptop",
     "vintage_day_bed", "ClassicNightstand_01", "modern_wooden_cabinet",
     "chess_set", "wooden_bowl_01", "jug_01", "brass_candleholders",
-    "vintage_grandfather_clock_01", "anthurium_botany_01", "Chandelier_01",
+    "vintage_grandfather_clock_01", "potted_plant_01", "Chandelier_01",
     "vintage_suitcase", "ceramic_vase_03",
 ]
 TEXTURES = [

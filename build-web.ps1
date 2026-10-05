@@ -28,6 +28,12 @@ try {
         New-Item -ItemType Directory -Force -Path (Join-Path $arenaDist 'assets/bot') | Out-Null
         Copy-Item -Path (Join-Path $botArt '*.jpg') -Destination (Join-Path $arenaDist 'assets/bot') -Force
     }
+    # Music (tools/music.py; Kevin MacLeod, CC BY 4.0, see CREDITS.md).
+    $music = Join-Path $arenaRoot 'assets/sound'
+    if (Test-Path -LiteralPath $music) {
+        New-Item -ItemType Directory -Force -Path (Join-Path $arenaDist 'assets/sound') | Out-Null
+        Copy-Item -Path (Join-Path $music '*.mp3') -Destination (Join-Path $arenaDist 'assets/sound') -Force
+    }
     # The night city behind the windows (tools/backdrop/city.py).
     $backdrop = Join-Path $arenaRoot 'assets/backdrop'
     if (Test-Path -LiteralPath $backdrop) {

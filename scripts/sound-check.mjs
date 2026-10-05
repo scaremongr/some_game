@@ -31,11 +31,21 @@ try {
     if (m.peak < 0.015 || m.peak > 0.99) failed = true;
   }
   console.log('music           peak   rms');
-  for (const [track, heat] of [['lobby', 0], ['arcade', 0], ['arcade', 1], ['brawl', 0], ['brawl', 1]]) {
-    const m = await measure('music', track, [], 12, heat);
-    console.log((track + (heat ? ' hot' : '')).padEnd(14), m.peak.toFixed(3), m.rms.toFixed(3));
+  for (const track of ['lobby', 'fight1', 'fight2', 'fight3']) {
+    const m = await measure('music', track, [], 20);
+    console.log(track.padEnd(14), m.peak.toFixed(3), m.rms.toFixed(3));
     if (m.rms < 0.01 || m.peak > 0.99) failed = true;
   }
+  // Live: the lobby track plays after the first tap; a fight switches it.
+  await page.evaluate(() => window.arenaTest.sound.setMode('all'));
+  await page.mouse.click(5, 5); await page.waitForTimeout(2500);
+  const lobby = await page.evaluate(() => window.arenaTest.sound.playing());
+  console.log('lobby player  ', JSON.stringify(lobby));
+  if (!lobby || lobby.paused || lobby.time < 0.5 || !lobby.src.endsWith('lobby.mp3')) failed = true;
+  await page.click('#practice'); await page.waitForTimeout(3000);
+  const fight = await page.evaluate(() => window.arenaTest.sound.playing());
+  console.log('fight player  ', JSON.stringify(fight));
+  if (!fight || fight.paused || !/fight\d\.mp3$/.test(fight.src) || fight.time < 0.5) failed = true;
 } finally { await browser.close(); app.server.close(); }
 if (errors.length) { console.error(errors.join('\n')); failed = true; }
 if (failed) { console.error('Sound check failed'); process.exitCode = 1; } else console.log('Sound check passed');

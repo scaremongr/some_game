@@ -181,7 +181,8 @@ def build_apartment(r):
     light("worktop_strip", (-6.8, 2.08, -2.85), (-6.8, 0.9, -2.8), 65, (1.0, 0.82, 0.57), 1.5)
 
     # GARDEN: sunlit foliage, chess table and mismatched chairs.
-    asset("anthurium_botany_01", -11.25, -2.55, ("h", 1.70), "garden", tris=6500)
+    # One plant in a pot (anthurium_botany_01 was a set of cut plants: leaves grew from the floor).
+    asset("potted_plant_01", -11.2, -2.5, ("h", 1.65), "garden", tris=8000)
     asset("potted_plant_04", -8.75, -2.2, ("h", 1.45), "garden", tris=4000)
     asset("side_table_tall_01", -10.0, -1.4, ("h", 0.72), "garden", owner=16, tris=2000)
     asset("chess_set", -10.0, -1.4, ("w", 0.53), "garden", owner=16, y=0.73, tris=3500)

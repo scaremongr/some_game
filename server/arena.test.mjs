@@ -82,3 +82,15 @@ test('production WebSocket validates origin and a signed Telegram login',async()
   } finally {await app.close();}
 });
 
+test('static files answer byte ranges (Safari streams audio only this way)', async()=>{
+  const app=await createArena({dev:true});app.server.listen(0,'127.0.0.1');await new Promise(r=>app.server.once('listening',r));
+  const base=`http://127.0.0.1:${app.server.address().port}`;
+  try{
+    const whole=await fetch(base+'/index.html');assert.equal(whole.headers.get('accept-ranges'),'bytes');
+    const size=(await whole.arrayBuffer()).byteLength;
+    const part=await fetch(base+'/index.html',{headers:{range:'bytes=0-9'}});
+    assert.equal(part.status,206);assert.equal(part.headers.get('content-range'),`bytes 0-9/${size}`);assert.equal((await part.arrayBuffer()).byteLength,10);
+    const tail=await fetch(base+'/index.html',{headers:{range:'bytes=-5'}});assert.equal(tail.status,206);assert.equal((await tail.arrayBuffer()).byteLength,5);
+    assert.equal((await fetch(base+'/index.html',{headers:{range:`bytes=${size + 10}-`}})).status,416);
+  }finally{await app.close();}
+});

@@ -1,11 +1,14 @@
-// Sound for the arena, synthesised with WebAudio: no audio files to load.
-// Effects (hits, blocks, throws, breaking furniture, the round calls) are
-// built from noise and oscillators per event; the music is a small step
-// sequencer playing three tracks: a lo-fi groove for the lobby and two
-// synthwave loops for fights. Modes: 'all', 'sfx' (no music), 'off'.
+// Sound for the arena. Effects (hits, blocks, throws, breaking furniture,
+// the round calls) are synthesised with WebAudio from noise and oscillators;
+// the music is recorded tracks (assets/sound, Kevin MacLeod, CC BY 4.0, see
+// CREDITS.md) streamed through the same mixer. Modes: 'all', 'sfx', 'off'.
 const AC = window.AudioContext || window.webkitAudioContext;
 let ctx = null, master, sfxBus, musicBus, reverb, noise;
-let mode = 'all', wanted = null, track = null, intensity = 0;
+let mode = 'all', wanted = null, track = null;
+// One <audio> element for every track: iOS lets an element play later only
+// if it was first started from a tap, so it is created in the first tap.
+let player = null, playerSource = null;
+const TRACK_FILES = { lobby: 'assets/sound/lobby.mp3', fight1: 'assets/sound/fight1.mp3', fight2: 'assets/sound/fight2.mp3', fight3: 'assets/sound/fight3.mp3' };
 // Mix levels: effects stay present but never harsh; music under them.
 const SFX = 0.5, MUSIC = 0.17;
 
@@ -41,11 +44,21 @@ function unlock() {
   init(); if (!ctx) return;
   if (ctx.state !== 'running') ctx.resume().catch(() => {});
   const b = ctx.createBuffer(1, 1, 22050), s = ctx.createBufferSource(); s.buffer = b; s.connect(ctx.destination); s.start(0);
+  if (!player) {
+    try {
+      player = new Audio(); player.loop = true; player.preload = 'auto';
+      playerSource = ctx.createMediaElementSource(player); playerSource.connect(musicBus);
+      // Blessed by this tap: later tracks may start without one.
+      player.src = TRACK_FILES[wanted] || TRACK_FILES.lobby; track = wanted || 'lobby';
+      if (mode === 'all') player.play().catch(() => {}); else player.load();
+    } catch { player = null; }
+  }
 }
 for (const e of ['pointerdown', 'keydown', 'touchend']) window.addEventListener(e, unlock, { capture: true, passive: true });
 document.addEventListener('visibilitychange', () => {
   if (!ctx) return;
-  if (document.hidden) ctx.suspend().catch(() => {}); else if (mode !== 'off') ctx.resume().catch(() => {});
+  if (document.hidden) { ctx.suspend().catch(() => {}); player?.pause(); }
+  else if (mode !== 'off') { ctx.resume().catch(() => {}); if (mode === 'all' && track) player?.play().catch(() => {}); }
 });
 
 function apply() {
@@ -54,7 +67,7 @@ function apply() {
   sfxBus.gain.setTargetAtTime(mode === 'off' ? 0 : SFX, t, 0.05);
   musicBus.gain.setTargetAtTime(mode === 'all' ? MUSIC : 0, t, 0.4);
   if (mode === 'off') ctx.suspend().catch(() => {}); else if (ctx.state !== 'running' && navigator.userActivation?.hasBeenActive !== false) ctx.resume().catch(() => {});
-  if (mode === 'all' && wanted && !track) startTrack(wanted);
+  if (mode === 'all' && wanted && (track !== wanted || player?.paused)) startTrack(wanted);
 }
 
 // ---- Building blocks --------------------------------------------------------------
@@ -195,152 +208,31 @@ export function play(name, opts = {}) {
 }
 
 // ---- Music ------------------------------------------------------------------
-// Instruments write into the music bus; `step` is a sixteenth note.
-function kick(t, v = 1) {
-  const g = gain(musicBus); env(g.gain, t, 1.0 * v, 0.002, 0.32);
-  osc('sine', 140, t, t + 0.4, g).frequency.exponentialRampToValueAtTime(44, t + 0.11);
-  const c = gain(filter('highpass', 3000, 0.5, musicBus)); env(c.gain, t, 0.25 * v, 0.001, 0.012); burst(t, 0.02, c);
-}
-function snare(t, v = 1, tone = 190) {
-  const g = gain(filter('highpass', 1300, 0.6, musicBus)); env(g.gain, t, 0.55 * v, 0.001, 0.17); burst(t, 0.22, g);
-  send(g, 0.25);
-  const b = gain(musicBus); env(b.gain, t, 0.35 * v, 0.001, 0.08); osc('triangle', tone, t, t + 0.12, b);
-}
-function hat(t, v = 1, open = false) {
-  const g = gain(filter('highpass', 7500, 0.7, musicBus)); env(g.gain, t, 0.18 * v, 0.001, open ? 0.18 : 0.035); burst(t, open ? 0.22 : 0.05, g, 1.3);
-}
-function bass(t, m, len, cutoff = 700, type = 'sawtooth') {
-  const f = filter('lowpass', cutoff, 4, musicBus);
-  f.frequency.setValueAtTime(cutoff * 2.2, t); f.frequency.exponentialRampToValueAtTime(cutoff, t + 0.12);
-  const g = gain(f); env(g.gain, t, 0.42, 0.006, len);
-  osc(type, hz(m), t, t + len + 0.05, g);
-  const sub = gain(musicBus); env(sub.gain, t, 0.3, 0.006, len); osc('sine', hz(m - 12), t, t + len + 0.05, sub);
-}
-function pad(t, notes, len, bright = 1200, level = 0.08) {
-  const f = filter('lowpass', bright, 0.5, musicBus); send(f, 0.5);
-  const g = gain(f);
-  g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(level, t + 0.35); g.gain.setValueAtTime(level, t + len - 0.2); g.gain.linearRampToValueAtTime(0.0001, t + len + 0.4);
-  for (const m of notes) for (const d of [-7, 7]) { const o = osc('sawtooth', hz(m), t, t + len + 0.5, g); o.detune.value = d; }
-}
-function pluck(t, m, v = 1, type = 'square') {
-  const f = filter('lowpass', 2400, 1, musicBus); send(f, 0.35);
-  const g = gain(f); env(g.gain, t, 0.07 * v, 0.003, 0.22);
-  osc(type, hz(m), t, t + 0.3, g);
-}
-function keys(t, notes, len, level = 0.07) {
-  // Electric piano: sine + a touch of the octave, a soft tremolo.
-  const f = filter('lowpass', 2200, 0.5, musicBus); send(f, 0.45);
-  const g = gain(f); env(g.gain, t, level, 0.01, len);
-  const trem = ctx.createOscillator(), depth = ctx.createGain(); trem.frequency.value = 4.5; depth.gain.value = level * 0.25;
-  trem.connect(depth); depth.connect(g.gain); trem.start(t); trem.stop(t + len + 0.1);
-  for (const m of notes) { osc('sine', hz(m), t, t + len, g); const h = gain(g, 0.18); osc('sine', hz(m + 12), t, t + len, h); }
-}
-
-function stab(t, notes, len, cutoff = 2600, level = 0.06) {
-  // A bright chord hit: two detuned saws per note through a closing filter.
-  const f = filter('lowpass', cutoff, 1.5, musicBus); f.frequency.setValueAtTime(cutoff * 1.6, t); f.frequency.exponentialRampToValueAtTime(cutoff * 0.5, t + len);
-  send(f, 0.2);
-  const g = gain(f); env(g.gain, t, level, 0.004, len);
-  for (const m of notes) for (const d of [-9, 9]) { const o = osc('sawtooth', hz(m), t, t + len + 0.05, g); o.detune.value = d; }
-}
-function lead(t, m, len, level = 0.06) {
-  // A square lead with a little vibrato and echo.
-  const f = filter('lowpass', 3200, 0.8, musicBus); send(f, 0.3);
-  const g = gain(f); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(level, t + 0.01); g.gain.setValueAtTime(level * 0.8, t + len * 0.7); g.gain.exponentialRampToValueAtTime(0.0001, t + len);
-  const o = osc('square', hz(m), t, t + len, g);
-  const vib = ctx.createOscillator(), depth = ctx.createGain(); vib.frequency.value = 6; depth.gain.value = 8;
-  vib.connect(depth); depth.connect(o.detune); vib.start(t + 0.08); vib.stop(t + len);
-}
-function clap(t, v = 1) {
-  const g = gain(filter('bandpass', 1500, 0.9, musicBus)); send(g, 0.3);
-  for (const d of [0, 0.011, 0.022]) { const e = gain(g); env(e.gain, t + d, 0.5 * v, 0.001, d === 0.022 ? 0.14 : 0.01); burst(t + d, 0.16, e); }
-}
-
-// Tracks: tempo, bars of chords, and a function that schedules one step.
-const TRACKS = {
-  // Lobby: lo-fi rooftops at night. Fmaj7 Em7 Dm9 Cmaj7, swung hats.
-  lobby: {
-    bpm: 84, swing: 0.32,
-    chords: [[53, 57, 60, 64], [52, 55, 59, 62], [50, 53, 57, 60, 64], [48, 52, 55, 59]],
-    step(t, s, bar, chord, dur) {
-      const root = chord[0] - 12;
-      if (s === 0) keys(t, chord.map(m => m + 12), dur * 7);
-      if (s === 6) keys(t, chord.slice(1).map(m => m + 12), dur * 5, 0.045);
-      if (s === 0 || s === 10) kick(t, 0.7);
-      if (s === 4 || s === 12) snare(t, 0.45, 240);
-      if (s % 2 === 0) hat(t, s % 4 === 2 ? 0.7 : 0.45);
-      if (s === 0) bass(t, root, dur * 6, 300, 'triangle');
-      if (s === 10) bass(t, root + 7, dur * 4, 300, 'triangle');
-      if (bar % 4 === 3 && s === 14) pluck(t, chord[3] + 12, 0.8, 'triangle');
-    },
-  },
-  // Fight 1: arcade rock. A G D A, driving bass, power stabs, a riff.
-  arcade: {
-    bpm: 138, swing: 0,
-    chords: [[45, 52, 57], [43, 50, 55], [38, 45, 50], [45, 52, 57]],
-    riff: [{ 0: 76, 2: 78, 4: 81, 7: 78, 8: 76, 10: 73, 12: 76, 14: 74 }, { 0: 73, 2: 71, 4: 69, 8: 71, 10: 73, 12: 76 }],
-    step(t, s, bar, chord, dur, heat) {
-      const root = chord[0];
-      if (s % 4 === 0 || (s === 10 && bar % 2)) kick(t);
-      if (s === 4 || s === 12) { snare(t, 1, 200); clap(t, 0.6); }
-      hat(t, s % 4 === 2 ? 0.9 : 0.4, s % 4 === 2);
-      if (heat > 0.5 && s % 2) hat(t, 0.35);
-      if (s % 2 === 0) bass(t, root - 12 + (s === 14 ? 12 : 0), dur * 1.5, 900 + heat * 900, 'sawtooth');
-      if (s === 0) stab(t, [root + 12, root + 19, root + 24], dur * 3, 2400);
-      if (s === 6 || s === 11) stab(t, [root + 12, root + 19, root + 24], dur * 1.5, 2400, 0.045);
-      const n = this.riff[bar % 2][s];
-      if (n && (bar % 8 >= 4 || heat > 0.6)) lead(t, n, dur * 1.8);
-    },
-  },
-  // Fight 2: electro-funk brawl. Em7 A9 in dorian, slap bass, offbeat stabs.
-  brawl: {
-    bpm: 128, swing: 0.08,
-    chords: [[52, 55, 59, 62], [57, 61, 64, 66], [52, 55, 59, 62], [57, 61, 64, 67]],
-    step(t, s, bar, chord, dur, heat) {
-      const root = chord[0] - 12;
-      if (s % 4 === 0) kick(t);
-      if (s === 4 || s === 12) clap(t);
-      hat(t, s % 2 ? 0.5 : 0.8, s % 4 === 2);
-      const line = { 0: 0, 3: 12, 6: 0, 7: 10, 10: 0, 12: 12, 14: 7 };
-      if (s in line) bass(t, root - 12 + line[s], dur * (s === 0 ? 2 : 1), 1100 + heat * 1000, 'square');
-      if (s % 4 === 2) stab(t, chord.map(m => m + 12), dur * 0.9, 3200, 0.05);
-      if (bar % 8 >= 4 || heat > 0.6) { const arp = [0, 2, 3, 1]; pluck(t, chord[arp[s % 4]] + 24, s % 4 === 0 ? 1 : 0.6); }
-    },
-  },
-};
-let timer = null, nextAt = 0, stepIndex = 0;
 function startTrack(name) {
-  stopTrack();
-  if (!ctx || mode !== 'all') return;
-  track = TRACKS[name]; nextAt = ctx.currentTime + 0.1; stepIndex = 0;
-  timer = setInterval(schedule, 40); schedule();
+  if (!ctx || !player || mode !== 'all' || !TRACK_FILES[name]) return;
+  const src = new URL(TRACK_FILES[name], location.href).href;
+  if (player.src !== src) player.src = src;
+  track = name;
+  // Fade in from silence.
+  const t = ctx.currentTime;
+  musicBus.gain.cancelScheduledValues(t); musicBus.gain.setValueAtTime(0, t); musicBus.gain.linearRampToValueAtTime(MUSIC, t + 1.2);
+  player.play().catch(() => {});
 }
-function stopTrack() { clearInterval(timer); timer = null; track = null; }
-function schedule() {
-  if (!track || !ctx || ctx.state !== 'running') { if (ctx) nextAt = Math.max(nextAt, ctx.currentTime + 0.05); return; }
-  const dur = 60 / track.bpm / 4;
-  while (nextAt < ctx.currentTime + 0.18) {
-    const s = stepIndex % 16, bar = Math.floor(stepIndex / 16);
-    const chord = track.chords[bar % track.chords.length];
-    const swing = s % 2 ? track.swing * dur : 0;
-    try { track.step(nextAt + swing, s, bar, chord, dur, intensity); } catch {}
-    nextAt += dur; stepIndex++;
-  }
-}
-// Which track should play: 'lobby', 'arcade', 'brawl' or null for silence.
+function stopTrack() { player?.pause(); track = null; }
+// Which track should play: 'lobby', 'fight1'..'fight3' or null for silence.
 export function music(name) {
-  if (name === wanted && (track || mode !== 'all')) return;
+  if (name === wanted && (track === name || mode !== 'all')) return;
   wanted = name;
-  if (!ctx) return;
+  if (!ctx || !player) return;
   if (!name) { stopTrack(); return; }
   if (mode === 'all') {
-    // A short fade between tracks.
-    musicBus.gain.setTargetAtTime(0, ctx.currentTime, 0.12);
-    setTimeout(() => { if (wanted === name) { startTrack(name); apply(); } }, 350);
+    // A short fade out, then the next track from its start.
+    musicBus.gain.setTargetAtTime(0, ctx.currentTime, 0.15);
+    setTimeout(() => { if (wanted === name) { if (player.src.endsWith(TRACK_FILES[name])) player.currentTime = 0; startTrack(name); } }, 500);
   }
 }
-// 0..1: low health or the last seconds open the filters and add hats.
-export function heat(value) { intensity = Math.max(0, Math.min(1, value)); }
+// Kept for callers: recorded tracks carry their own intensity.
+export function heat() {}
 export function setMode(next) {
   mode = next;
   if (next === 'off') stopTrack();
@@ -358,11 +250,14 @@ export async function measure(kind, name, opts = {}, seconds = 2) {
   try {
     build(); mode = 'all'; sfxBus.gain.value = SFX; musicBus.gain.value = MUSIC;
     if (kind === 'music') {
-      const t = TRACKS[name], dur = 60 / t.bpm / 4;
-      for (let i = 0, at = 0.05; at < seconds; i++, at += dur) t.step(at + (i % 2 ? t.swing * dur : 0), i % 16, Math.floor(i / 16), t.chords[Math.floor(i / 16) % t.chords.length], dur, opts.heat || 0);
+      // The track file through the music bus (first `seconds` of it).
+      const buffer = await ctx.decodeAudioData(await (await fetch(TRACK_FILES[name])).arrayBuffer());
+      const s = ctx.createBufferSource(); s.buffer = buffer; s.connect(musicBus); s.start(0);
     } else effects[name](0.05, ...(opts.args || []));
     const data = (await ctx.startRendering()).getChannelData(0);
     let peak = 0, sum = 0; for (const v of data) { peak = Math.max(peak, Math.abs(v)); sum += v * v; }
     return { peak, rms: Math.sqrt(sum / data.length) };
   } finally { [ctx, master, sfxBus, musicBus, reverb, noise, mode] = saved; }
 }
+// Tests: which track the player holds and whether it advances.
+export function playing() { return player ? { track, src: player.src, time: player.currentTime, paused: player.paused } : null; }
