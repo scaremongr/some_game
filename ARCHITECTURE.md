@@ -52,6 +52,7 @@ Principles:
 | `src/game/fighter_model.rs` | `FighterModel` + `Avatar` (per body: character, rig, bones, captured clips). Picks a `Clip` from `Fighter` state, maps it to a captured take (`take_for`), warps time with marks, root motion (`Travel`), layers (walk blend, crouch upper body, uppercut rising from crouch, recoil lean, fists), bone-space cross-fades, mirroring of the right fighter. Tests pose every state. |
 | `src/game/mocap.rs` | Fight pack format `PFP1` (body bones, i16 quats, 30 fps), sampling, `Marks`/`strike_marks`, `strike_limb`. |
 | `src/game/anims.rs`, `body.rs` | Authored key-pose animation + IK body solver: the fallback when a pack lacks a take. |
+| `src/game/ragdoll.rs` | Physical layer over the animated pose: 18 joint particles (hips pinned to the animation, the rest damped springs around it), blows push the struck part, root acceleration is felt as inertia, loose parts sag, bone lengths and the floor are kept; bones are turned to follow. `Drive` per state: full control normally, loose limbs in flight and knockdowns, limp after a KO. Cosmetic. |
 | `src/game/arena_props.rs` | The room: baked apartment from `assets/room.glb` (pieces `oNN_kkk` belong to combat room object NN; `glassNN_kkk` panes; `s_*` fixed) or a box-room fallback; deterministic debris from snapshot ticks. |
 | `src/game/timeline.rs`, `effects.rs`, `camera.rs` | Interpolation of snapshots, particles/sparks, camera. |
 | `src/game/dance.rs`, `dancer.rs`, `mirror.rs`, `clips.rs`, `menu.rs`, `rhythm.rs` | Legacy dance game scenes (run natively with args `dance`, `mirror`, `clips`). `dancer.rs` also holds `Character` used by the fight. |
@@ -105,12 +106,15 @@ Principles:
   clips retargeted onto that fighter's skeleton. Keys (in
   `assets-src/fight/clips.txt`, `key = file.glb [@ from-to]`): `idle, guard,
   walk_fwd/back, crouch, crouch_walk_fwd/back, jab_s/m/l, cross, heavy (spinning
-  back kick), uppercut (rising lead hand), kick, low_kick, sweep, roundhouse,
+  back kick), uppercut (rising lead hand), kick, low_kick, hook, side_kick,
+  sweep, roundhouse,
   special, throw, held (victim in a grip), air_kick, smash, jump/jump_fwd/
   jump_back, dash_fwd/back, block (guard held on one frame, blocked blows play
   its recoil; the crouching guard takes its upper body), hit_head, hit_gut,
-  stagger, dizzy, hit_wall, air_hit, air_down, thrown, thrown_down, swept,
-  getup, ko, victory, defeat`. Missing keys fall back to authored poses.
+  hit_light (jab), hit_side (hook), hit_spin (counter hit), gut_big (side
+  kick), stagger, dizzy, hit_wall, air_hit, air_down, thrown, thrown_down,
+  swept, getup, ko, victory/victory2/victory3, defeat/defeat2 (picked by the
+  round number)`. Missing keys fall back to authored poses.
 - Marks: strikes by the striking limb's reach (`strike_marks`, `Marks::fit`,
   max speed-up 2.5×); falls by hips height; jumps by feet contact; throw by
   first two-hand reach. Knockdown lasts `KNOCKDOWN = 56` ticks, a grip
@@ -119,6 +123,10 @@ Principles:
   spot, rises into the opponent over its startup when it will connect.
 - Guard readability: the block take pose, a cyan rim on a guarding fighter and
   a barrier flash (`Effects::shield`) where a blow meets the guard.
+- Physical layer (`ragdoll.rs`) runs last, after the cross-fade: `fight.rs`
+  `push_bodies` maps each event to a body part and a push (jab: head back,
+  hook: head sideways, uppercut: head up, kicks: the gut, lows: the legs, a
+  block: the forearms, a parry: the attacker's arms). Off in preview mode.
 - Baked room: `tools/room/apartment.py` authors five open furnished rooms;
   `build_room.py` supplies Blender import/material/preview helpers. CC0 Poly Haven
   assets and seamless architectural surfaces, with 22 additional model types.
@@ -137,8 +145,9 @@ Principles:
   start in living room, kitchen, study, garden, bedroom (then repeat).
 - Actions: 0 idle, 1 jab, 2 heavy (overhead), 3 dash, 4 throw, 5 hitstun,
   8 kick, 9 sweep, 10 uppercut, 11 cross, 12 roundhouse, 13 air kick,
-  14 special, 15 knockdown, 16 low kick, 19 room smash. Crouch + J/U/K =
-  low kick / sweep / uppercut (`select_action`).
+  14 special, 15 knockdown, 16 low kick, 17 hook, 18 side kick, 19 room
+  smash. Crouch + J/U/K = low kick / sweep / uppercut; a repeated button
+  continues its string even on a whiff (J-J-J, U-U; `moves::string`).
 - Defence rules (2026-10-05 iteration, see COMBAT_RESEARCH.md §18): parry only
   for a fresh guard (`PARRY`, `PARRY_COOLDOWN`); light strings continue on
   block (`moves::block_cancel`); no throws on a blocking victim; throw tech
@@ -238,8 +247,8 @@ npm ci
 python tools/fetch-assets.py                 # models + packs (not in git)
 .\build-web.ps1                              # -> dist/ (both wasm + web + assets)
 .\build-web.ps1 -Serve                       # + local dev server on :8080 (guest identities)
-cargo test --offline --lib                   # engine/game: 60 tests
-cargo test --offline --manifest-path combat/Cargo.toml   # combat: 34 tests
+cargo test --offline --lib                   # engine/game: 63 tests
+cargo test --offline --manifest-path combat/Cargo.toml   # combat: 35 tests
 npm test                                     # server: 15 tests (node:test)
 npm run test:browser; npm run test:combat; npm run test:physics   # Playwright, need dist/
 ```

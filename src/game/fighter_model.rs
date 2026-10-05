@@ -10,6 +10,7 @@ use super::{
     body::{BodyPose, BodyRig, LEAD, REAR},
     dancer::Character,
     mocap::{strike_limb, strike_marks, Marks, MocapLib},
+    ragdoll::{Drive, Part, Ragdoll, RagdollRig},
     timeline::Body,
 };
 use std::collections::HashMap;
@@ -65,6 +66,8 @@ pub struct View {
     pub bounds: [f32; 2],
     /// Screenshot mode: no extrapolation, clips time from the frame counter.
     pub preview: bool,
+    /// Picks between equivalent takes (victory and defeat poses).
+    pub variant: u32,
 }
 
 struct Ko {
@@ -239,6 +242,10 @@ struct Side {
     /// the guard recoil runs on its own clock, smooth between snapshots.
     block_total: f32,
     block_clock: f32,
+    /// Physical secondary motion over the animated pose.
+    ragdoll: Ragdoll,
+    /// Room directions into this body's space (placement without the origin).
+    to_body: Mat4,
 }
 impl Side {
     fn new() -> Side {
@@ -269,6 +276,8 @@ impl Side {
             thrown: false,
             block_total: 0.0,
             block_clock: f32::MAX,
+            ragdoll: Ragdoll::default(),
+            to_body: Mat4::IDENTITY,
         }
     }
 }
@@ -285,6 +294,8 @@ pub struct Avatar {
     /// Bones from the lower spine up (chest, arms, head).
     upper: Vec<bool>,
     captured: Option<Captured>,
+    /// Joints for the physical layer (None: the rig lacks a main bone).
+    ragdoll: Option<RagdollRig>,
 }
 
 /// Both fighters: picks and blends clips from the fight state and poses
@@ -340,7 +351,8 @@ impl Avatar {
             }
         }
         let hips = skeleton.find_like(super::character::bone::HIPS).ok_or("fighter rig has no hips")?;
-        Ok(Self { character, rig, bones, hips, upper, captured: None })
+        let ragdoll = RagdollRig::new(&character.skeleton);
+        Ok(Self { character, rig, bones, hips, upper, captured: None, ragdoll })
     }
 
     /// Loads a fight pack. Every clip becomes a take named by its pack key;
@@ -610,6 +622,13 @@ impl FighterModel {
     pub fn take_impacts(&mut self) -> Vec<(Vec3, f32)> {
         std::mem::take(&mut self.impacts)
     }
+    /// A blow on one side's body: `dir` in the room (x away from the
+    /// attacker, y up, z towards the camera), `speed` in m/s.
+    pub fn push(&mut self, side: usize, part: Part, dir: Vec3, speed: f32) {
+        let s = &mut self.sides[side];
+        let v = s.to_body.transform_direction(dir.normalize()) * speed;
+        s.ragdoll.push(part, v);
+    }
 
     fn choose(&self, side: usize, f: &Fighter, view: &View) -> Clip {
         if f.hp == 0 {
@@ -659,7 +678,8 @@ impl FighterModel {
     }
 
     /// The captured take for a state, if the pack has one.
-    fn take_for(&self, side: usize, clip: Clip, frame: f32, distance: f32, jump_dir: f32, thrown: bool) -> Option<&'static str> {
+    #[allow(clippy::too_many_arguments)]
+    fn take_for(&self, side: usize, clip: Clip, frame: f32, distance: f32, jump_dir: f32, thrown: bool, variant: u32) -> Option<&'static str> {
         let captured = self.avatar(side).captured.as_ref()?;
         let has = |k: &str| captured.takes.contains_key(k);
         let pick = |keys: &[&'static str]| keys.iter().copied().find(|k| has(k));
@@ -687,6 +707,8 @@ impl FighterModel {
             Clip::Attack(13) => pick(&["air_kick"]),
             Clip::Attack(19) => pick(&["smash"]),
             Clip::Attack(16) => pick(&["low_kick", "kick"]),
+            Clip::Attack(17) => pick(&["hook", "cross"]),
+            Clip::Attack(18) => pick(&["side_kick", "kick"]),
             Clip::Air if jump_dir > 0.0 => pick(&["jump_fwd", "jump"]),
             Clip::Air if jump_dir < 0.0 => pick(&["jump_back", "jump"]),
             Clip::Air => pick(&["jump"]),
@@ -696,7 +718,11 @@ impl FighterModel {
             Clip::Dash(true) => pick(&["dash_fwd"]),
             Clip::Dash(false) => pick(&["dash_back"]),
             Clip::React(Reaction::Head) => pick(&["hit_head"]),
+            Clip::React(Reaction::HeadLight) => pick(&["hit_light", "hit_head"]),
+            Clip::React(Reaction::HeadSide) => pick(&["hit_side", "hit_head"]),
+            Clip::React(Reaction::Spin) => pick(&["hit_spin", "hit_head"]),
             Clip::React(Reaction::Gut) => pick(&["hit_gut"]),
+            Clip::React(Reaction::GutBig) => pick(&["gut_big", "hit_gut"]),
             Clip::React(Reaction::Parried | Reaction::Pushed) => pick(&["stagger"]),
             Clip::React(Reaction::GuardBreak) => pick(&["dizzy"]),
             Clip::React(Reaction::Wall) => pick(&["hit_wall", "hit_head"]),
@@ -712,8 +738,15 @@ impl FighterModel {
                 }
             }
             Clip::Knockout => pick(&["ko"]),
-            Clip::Victory => pick(&["victory"]),
-            Clip::Defeat => pick(&["defeat"]),
+            Clip::Victory => match variant % 3 {
+                1 => pick(&["victory2", "victory"]),
+                2 => pick(&["victory3", "victory"]),
+                _ => pick(&["victory"]),
+            },
+            Clip::Defeat => match variant % 2 {
+                1 => pick(&["defeat2", "defeat"]),
+                _ => pick(&["defeat"]),
+            },
             _ => None,
         }
     }
@@ -755,7 +788,7 @@ impl FighterModel {
                 Clip::Down(true) => previous.thrown,
                 _ => false,
             };
-            let take_key = self.take_for(side, clip, body.frame, (bodies[1 - side].x - body.x).abs(), jump_dir, thrown);
+            let take_key = self.take_for(side, clip, body.frame, (bodies[1 - side].x - body.x).abs(), jump_dir, thrown, view.variant);
             let dt = view.dt;
             let av = &self.avatars[self.which[side]];
             let s = &mut self.sides[side];
@@ -841,7 +874,11 @@ impl FighterModel {
                     Clip::React(kind) => {
                         let (hips, torso, head) = match kind {
                             Reaction::Head => (vec3(0.0, 0.0, -0.9), -4.5, -10.0),
+                            Reaction::HeadLight => (vec3(0.0, 0.0, -0.5), -2.5, -7.0),
+                            Reaction::HeadSide => (vec3(0.0, 0.0, -0.7), -3.0, -9.0),
+                            Reaction::Spin => (vec3(0.0, 0.1, -1.2), -6.0, -11.0),
                             Reaction::Gut => (vec3(0.0, -0.3, -1.0), 7.0, 5.0),
+                            Reaction::GutBig => (vec3(0.0, -0.4, -1.4), 9.0, 7.0),
                             Reaction::Low => (vec3(0.0, -0.9, -0.3), 2.5, 2.0),
                             Reaction::Wall => (vec3(0.0, 0.0, -1.2), -7.0, -9.0),
                             Reaction::GuardBreak => (vec3(0.0, 0.2, -1.0), -6.0, -7.0),
@@ -1340,15 +1377,48 @@ impl FighterModel {
                 }
             }
             s.out_locals.clone_from(&self.pose);
+            let yaw = std::f32::consts::FRAC_PI_2 - CAMERA_TURN;
+            let flip = if mirrored { -1.0 } else { 1.0 };
+            // Physical layer: hits, inertia, gravity on a loose body.
+            s.to_body = (Mat4::from_trs(Vec3::ZERO, Quat::IDENTITY, vec3(flip, 1.0, 1.0))
+                * Mat4::from_trs(Vec3::ZERO, Quat::from_axis_angle(Vec3::Y, yaw), vec3(1.0, 1.0, 1.0)))
+            .invert();
+            match (&av.ragdoll, view.preview) {
+                (Some(rig), false) => s.ragdoll.apply(
+                    rig,
+                    &av.character.skeleton,
+                    &mut self.pose,
+                    &mut self.globals[side],
+                    av.character.transform,
+                    s.to_body,
+                    root,
+                    drive(clip, frame),
+                    dt,
+                ),
+                _ => s.ragdoll.reset(),
+            }
             av.character
                 .skeleton
                 .skin_matrices(&self.pose, &mut self.globals[side], &mut self.skin[side]);
-            let yaw = std::f32::consts::FRAC_PI_2 - CAMERA_TURN;
-            let flip = if mirrored { -1.0 } else { 1.0 };
             self.placement[side] = Mat4::from_trs(root, Quat::IDENTITY, vec3(flip, 1.0, 1.0))
                 * Mat4::from_trs(Vec3::ZERO, Quat::from_axis_angle(Vec3::Y, yaw), vec3(1.0, 1.0, 1.0))
                 * av.character.transform;
         }
+    }
+}
+
+/// How much the body is in control of itself: launched bodies trail their
+/// limbs, a knockdown falls loose and takes control back for the get-up, a
+/// knocked out body goes limp.
+fn drive(clip: Clip, frame: f32) -> Drive {
+    const FLIGHT: Drive = Drive { torso: 0.5, head: 0.3, arms: 0.18, legs: 0.25 };
+    const FALL: Drive = Drive { torso: 0.4, head: 0.25, arms: 0.12, legs: 0.15 };
+    const LIMP: Drive = Drive { torso: 0.25, head: 0.12, arms: 0.05, legs: 0.08 };
+    match clip {
+        Clip::AirHit => FLIGHT,
+        Clip::Down(_) => FALL.lerp(Drive::FULL, ((frame - DOWN_FALL) / 10.0).clamp(0.0, 1.0)),
+        Clip::Knockout => LIMP,
+        _ => Drive::FULL,
     }
 }
 
@@ -1394,6 +1464,8 @@ fn take_action(key: &str) -> Option<u32> {
         "air" => 13,
         "smash" => 19,
         "low" => 16,
+        "hook" => 17,
+        "side" => 18,
         _ => return None,
     })
 }
@@ -1413,6 +1485,7 @@ mod tests {
             reaction: [Reaction::Head; 2],
             bounds: [-3.0, 3.0],
             preview: false,
+            variant: 0,
         }
     }
     fn bodies(f: &[Fighter; 2], y: f32) -> [Body; 2] {

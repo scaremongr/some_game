@@ -483,10 +483,21 @@ pub enum Reaction {
     GuardBreak,
     Pushed,
     Wall,
+    /// A jab: the head snaps back a little.
+    HeadLight,
+    /// A hook: the head is whipped to the side.
+    HeadSide,
+    /// A counter hit: the body is spun round.
+    Spin,
+    /// A side kick: doubled over.
+    GutBig,
 }
 impl Reaction {
     pub fn from_attack(action: u32) -> Reaction {
         match action {
+            1 => Reaction::HeadLight,
+            17 => Reaction::HeadSide,
+            18 => Reaction::GutBig,
             8 | 14 | 19 => Reaction::Gut,
             9 | 16 => Reaction::Low,
             _ => Reaction::Head,
@@ -504,10 +515,10 @@ impl Reaction {
 /// Which limb lands the blow: 0/1 hands, 2/3 feet, 4 both hands.
 pub fn striker(action: u32) -> usize {
     match action {
-        1 => 0,
+        1 | 17 => 0,
         2 | 10 | 11 => 1,
         4 | 14 | 19 => 4,
-        8 | 13 => 2,
+        8 | 13 | 18 => 2,
         9 | 12 | 16 => 3,
         _ => 0,
     }
@@ -536,6 +547,8 @@ pub fn library() -> Library {
     attacks[14] = Some(impulse());
     attacks[19] = Some(ground_pound());
     attacks[16] = Some(low_kick());
+    attacks[17] = Some(hook());
+    attacks[18] = Some(side_kick());
     let reach = (0..20u32)
         .map(|action| {
             let (Some(anim), Some(m)) = (&attacks[action as usize], moves::attack(action)) else {
@@ -565,6 +578,11 @@ pub fn library() -> Library {
             react_guard_break(),
             react_parried(),
             react_wall(),
+            // Captured clips tell these apart; the authored poses share.
+            react_head(),
+            react_head(),
+            react_head(),
+            react_gut(),
         ],
         knockdown_air: knockdown(true, knock),
         knockdown_ground: knockdown(false, knock),
@@ -1017,6 +1035,79 @@ fn roundhouse() -> Anim {
     ])
     .with_lead(STRIKE)
 }
+fn hook() -> Anim {
+    let s = base();
+    // The lead hand loads wide, then swings round with the hips into the
+    // side of the head, elbow up.
+    let load = s.with(|p| {
+        p.pelvis = v(-0.85, 0.10, 0.0);
+        p.torso = v(-0.15, 0.20, 0.06);
+        p.hips.z -= 0.02;
+        p.hand[L] = v(0.30, 1.30, 0.20);
+        p.elbow[L] = v(1.0, 0.2, -0.3);
+    });
+    let hit = s.with(|p| {
+        p.hips = v(0.0, 0.86, 0.08);
+        p.pelvis = v(0.25, 0.14, 0.0);
+        p.torso = v(0.45, 0.24, -0.08);
+        p.hand[L] = v(-0.05, 1.36, 0.52);
+        p.elbow[L] = v(1.0, 0.6, 0.0);
+        p.palm[L] = v(0.0, -1.0, 0.0);
+        p.clav[L] = v(0.10, 0.35, 0.0);
+        p.hand[R] = v(-0.06, 1.28, 0.18);
+    });
+    let through = hit.with(|p| {
+        p.hand[L] = v(-0.18, 1.34, 0.46);
+        p.torso.x = 0.55;
+    });
+    Anim::new(vec![
+        key(0.0, s),
+        key(3.0, load).out(),
+        key(5.0, load),
+        key(8.0, hit).snap(),
+        key(9.0, through).out(),
+        key(12.0, through),
+        key(18.0, s.with(|p| p.hand[L] = v(0.12, 1.30, 0.32))).out(),
+        key(28.0, s),
+    ])
+    .with_lead(STRIKE)
+}
+
+fn side_kick() -> Anim {
+    let s = base();
+    // Knee up across the body, then the lead foot drives out flat at the
+    // stomach while the torso leans away.
+    let chamber = s.with(|p| {
+        p.hips = v(0.0, 0.88, -0.10);
+        p.pelvis = v(-1.2, 0.0, 0.0);
+        p.torso = v(-0.30, -0.10, 0.10);
+        p.foot[L] = v(0.06, 0.55, 0.20);
+        p.knee[L] = v(0.3, 0.6, 1.0);
+        p.foot_rot[L] = v(1.2, 0.3, 0.0);
+        p.foot_rot[R] = v(-1.4, 0.0, 0.0);
+        p.hand[L] = v(0.20, 1.22, 0.10);
+        p.hand[R] = v(-0.10, 1.20, 0.05);
+    });
+    let hit = chamber.with(|p| {
+        p.hips = v(0.0, 0.90, 0.04);
+        p.torso = v(-0.45, -0.30, 0.12);
+        p.foot[L] = v(0.04, 0.95, 1.00);
+        p.foot_rot[L] = v(1.5, -0.2, 0.0);
+        p.knee[L] = v(0.2, 1.0, 0.2);
+    });
+    Anim::new(vec![
+        key(0.0, s),
+        key(5.0, chamber).out(),
+        key(9.0, chamber.with(|p| p.foot[L].z = 0.26)),
+        key(12.0, hit).snap(),
+        key(13.0, hit.with(|p| p.foot[L].z += 0.04)).out(),
+        key(16.0, hit),
+        key(24.0, chamber),
+        key(34.0, s),
+    ])
+    .with_lead(STRIKE)
+}
+
 fn low_kick() -> Anim {
     let s = base();
     // Out of the crouch the weight settles on the lead leg and the rear foot

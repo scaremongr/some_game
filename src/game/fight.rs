@@ -8,6 +8,7 @@ use super::{
     arena_props::ArenaProps,
     effects::Effects,
     fighter_model::{FighterModel, View},
+    ragdoll::Part,
     timeline::{Body, Timeline},
 };
 use crate::engine::{
@@ -245,6 +246,9 @@ impl FightScene {
                 self.effects.dust(vec3(x, 0.05, 0.0), 8, 1.0);
             }
             self.shake = self.shake.max(0.7);
+            if let Some(model) = &mut self.model {
+                model.push(e.target, Part::Chest, vec3(if e.kind == 100 { 1.0 } else { -1.0 }, 0.3, 0.0), 2.6);
+            }
             return;
         }
         let target = e.target;
@@ -264,7 +268,11 @@ impl FightScene {
                 }
                 return;
             }
-            _ => self.reaction[target] = Reaction::from_attack(e.attacker_action),
+            _ => {
+                // A counter hit spins the body round (it also stuns longer).
+                let r = Reaction::from_attack(e.attacker_action);
+                self.reaction[target] = if e.kind == 6 && r != Reaction::Low { Reaction::Spin } else { r };
+            }
         }
         let victim = &self.fighters[target];
         let heavy = moves::attack(e.attacker_action).is_some_and(|m| m.heavy());
@@ -288,11 +296,12 @@ impl FightScene {
             return;
         }
         let dir = -victim.facing.signum() as f32;
+        let facing = victim.facing.signum() as f32;
+        self.push_bodies(&e);
         match e.kind {
             2 => {
                 // The guard holds: a barrier flashes in front of the defender
                 // at the height of the blow, sparks glance off it.
-                let facing = victim.facing.signum() as f32;
                 let at = vec3(self.bodies[target].x + facing * 0.34, self.impact.y.clamp(0.35, 1.6), 0.18);
                 self.effects.shield(at, facing, if heavy { 0.55 } else { 0.42 }, Color::hex(0x8FEFFF));
                 self.effects.sparks(at, dir, if heavy { 16 } else { 10 }, 4.5, Color::hex(0xCFF6FF));
@@ -320,6 +329,45 @@ impl FightScene {
                 if heavy {
                     self.punch = 1.0;
                 }
+            }
+        }
+    }
+
+    /// The physical layer: the struck part of the body gives way — the head
+    /// snaps back from a jab and sideways from a hook, a kick folds the
+    /// body, a low takes the legs, a blocked blow knocks the forearms back
+    /// and a parried one bounces the attacker's arms.
+    fn push_bodies(&mut self, e: &Event) {
+        let Some(model) = &mut self.model else { return };
+        let (target, other) = (e.target, 1 - e.target);
+        // From the attacker towards the struck body.
+        let away = if self.bodies[target].x >= self.bodies[other].x { 1.0 } else { -1.0 };
+        let m = moves::attack(e.attacker_action);
+        let heavy = m.is_some_and(|m| m.heavy());
+        match e.kind {
+            2 => model.push(target, Part::Guard, vec3(away, 0.15, 0.0), if heavy { 2.4 } else { 1.5 }),
+            3 => model.push(other, Part::Guard, vec3(-away, 0.5, 0.0), 2.8),
+            4 => model.push(target, Part::Chest, vec3(away, 0.3, 0.0), 2.8),
+            8 => model.push(other, Part::Chest, vec3(-away, 0.2, 0.0), 2.6),
+            9 => {
+                model.push(target, Part::Chest, vec3(away, 0.2, 0.0), 1.8);
+                model.push(other, Part::Chest, vec3(-away, 0.2, 0.0), 1.8);
+            }
+            10 => model.push(target, Part::Body, vec3(0.0, -1.0, 0.0), 2.2),
+            5 => {}
+            _ => {
+                let (part, dir) = match e.attacker_action {
+                    17 => (Part::Head, vec3(away * 0.6, 0.05, 0.8)),
+                    10 => (Part::Head, vec3(away * 0.4, 1.0, 0.0)),
+                    2 => (Part::Head, vec3(away, -0.3, 0.0)),
+                    12 => (Part::Head, vec3(away, 0.2, 0.3)),
+                    8 | 14 | 18 | 19 => (Part::Gut, vec3(away, 0.0, 0.0)),
+                    9 => (Part::Legs, vec3(-away, 0.5, 0.0)),
+                    16 => (Part::Legs, vec3(away * 0.4, 0.3, 0.0)),
+                    _ => (Part::Head, vec3(away, 0.1, 0.0)),
+                };
+                let speed = if heavy { 3.4 } else { 2.0 } * if e.kind == 6 { 1.3 } else { 1.0 };
+                model.push(target, part, dir, speed);
             }
         }
     }
@@ -424,6 +472,7 @@ impl FightScene {
                 reaction: self.reaction,
                 bounds: [-bound, bound],
                 preview,
+                variant: current.round,
             };
             model.update(&visual, &self.bodies, &view);
             for (at, strength) in model.take_impacts() {

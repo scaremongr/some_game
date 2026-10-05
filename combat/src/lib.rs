@@ -220,17 +220,21 @@ impl Match {
         if me.blockstun > 0 {
             return BLOCK | if me.crouch { CROUCH } else { 0 };
         }
-        // Strings: always on a hit, sometimes on a block.
-        let string = me.confirmed || (me.connected && roll(self.tick / 8) < 40);
-        if string {
-            if me.action == 1 && me.frame >= 9 {
-                return if me.previous & LIGHT == 0 { LIGHT } else { 0 };
-            }
-            if me.action == 11 && me.frame >= 8 && me.confirmed {
-                return KICK;
-            }
-            if me.action == 16 && me.frame >= 10 && me.confirmed && distance < 1150 {
-                return CROUCH | HEAVY;
+        // Strings: always on a hit, sometimes on a block or a whiff; the
+        // ender varies (hook, roundhouse, uppercut; side kick).
+        let string = me.confirmed || roll(self.tick / 8 ^ 0x51) < if me.connected { 45 } else { 25 };
+        let tap = |bits: u32| if me.previous & bits == 0 { bits } else { 0 };
+        if string && attack(me.action).is_some_and(|m| me.frame >= m.startup + 2) {
+            let ender = roll(self.tick.wrapping_sub(me.frame) ^ 0xE7);
+            match me.action {
+                1 => return tap(LIGHT),
+                11 if me.confirmed && ender < 35 => return tap(KICK),
+                11 if me.confirmed && ender < 55 && distance < 1200 => return tap(HEAVY),
+                11 if ender < 75 => return tap(LIGHT),
+                8 if ender < 60 => return tap(KICK),
+                18 if me.confirmed && ender < 40 => return tap(KICK),
+                16 if me.confirmed && distance < 1150 => return CROUCH | HEAVY,
+                _ => {}
             }
         }
         if me.y > 200 && distance < 1500 {
@@ -503,13 +507,17 @@ impl Match {
                 if f.action == 3 && f.frame < 11 {
                     f.x += f.dash_dir * 72;
                 }
-                // Strings continue on hit; light strings also on block.
-                let cancel = attack(f.action).is_some_and(|m| f.frame >= m.startup + 2)
-                    && if f.confirmed {
-                        moves::cancel(f.action, candidate)
+                // Combos continue on hit, light strings also on block, and a
+                // repeated button continues its string even on a whiff.
+                let cancel = attack(f.action).is_some_and(|m| {
+                    if f.confirmed {
+                        f.frame >= m.startup + 2 && moves::cancel(f.action, candidate)
+                    } else if f.connected {
+                        f.frame >= m.startup + 2 && moves::block_cancel(f.action, candidate)
                     } else {
-                        f.connected && moves::block_cancel(f.action, candidate)
-                    };
+                        f.frame >= m.startup + m.active && moves::string(f.action, candidate)
+                    }
+                });
                 if cancel || f.frame >= duration(f.action) {
                     f.action = 0;
                     f.frame = 0;
@@ -944,14 +952,16 @@ fn select_action(f: &Fighter, bits: u32) -> u32 {
             13
         } else if bits & CROUCH != 0 {
             9
-        } else if f.action == 11 {
-            12
         } else {
-            8
+            match f.action {
+                11 | 18 => 12,
+                8 => 18,
+                _ => 8,
+            }
         };
     }
     if bits & HEAVY != 0 {
-        return if bits & CROUCH != 0 || f.action == 8 || f.action == 11 {
+        return if bits & CROUCH != 0 || matches!(f.action, 8 | 11 | 17) {
             10
         } else {
             2
@@ -960,12 +970,14 @@ fn select_action(f: &Fighter, bits: u32) -> u32 {
     if bits & LIGHT != 0 {
         return if f.y > 0 {
             13
-        } else if f.action == 1 {
-            11
-        } else if bits & CROUCH != 0 {
+        } else if bits & CROUCH != 0 && f.action != 1 && f.action != 11 {
             16
         } else {
-            1
+            match f.action {
+                1 => 11,
+                11 => 17,
+                _ => 1,
+            }
         };
     }
     0
@@ -1382,15 +1394,15 @@ mod tests {
         assert_eq!(m.fighters[1].down, 0);
         assert!(m.fighters[1].invulnerable > 0);
     }
-    /// Can `side` start a fresh LIGHT attack on the next tick?
+    /// Can `side` start a fresh attack on the next tick? HEAVY has no
+    /// string follow-up, so only a finished recovery lets it start.
     fn can_start(m: &Match, side: usize, guard: u32) -> bool {
         let mut trial = m.clone();
         trial.fighters[side].previous = 0;
-        // A fresh attack, not a string continuing from the blocked one.
         trial.fighters[side].connected = false;
         trial.fighters[side].confirmed = false;
         let mut inputs = [guard, guard];
-        inputs[side] = LIGHT;
+        inputs[side] = HEAVY;
         trial.step(inputs);
         attack(trial.fighters[side].action).is_some() && trial.fighters[side].frame == 0
     }
@@ -1437,6 +1449,7 @@ mod tests {
         // Light pressure tools are slightly minus, enders are punishable.
         let (jab, low, cross, kick) = (adv(1), adv(16), adv(11), adv(8));
         let (special, heavy, sweep, uppercut, roundhouse) = (adv(14), adv(2), adv(9), adv(10), adv(12));
+        let (hook, side_kick) = (adv(17), adv(18));
         eprintln!("block advantage {report}");
         assert!((-2..=0).contains(&jab), "jab {jab}");
         assert!((-4..=-2).contains(&low), "low kick {low}");
@@ -1447,6 +1460,8 @@ mod tests {
         assert!(sweep <= -12, "sweep {sweep}");
         assert!(uppercut <= -16, "uppercut {uppercut}");
         assert!(roundhouse <= -8, "roundhouse {roundhouse}");
+        assert!((-6..=-4).contains(&hook), "hook {hook}");
+        assert!((-6..=-3).contains(&side_kick), "side kick {side_kick}");
     }
     #[test]
     fn low_kick_opens_a_standing_guard_and_links_into_the_uppercut() {
@@ -1568,6 +1583,27 @@ mod tests {
         let mut back = duel();
         run(&mut back, [LIGHT, DASH], 14);
         assert_eq!(back.fighters[1].hp, 100);
+    }
+    #[test]
+    fn repeated_buttons_play_strings_even_on_a_whiff() {
+        let mash = |button: u32| {
+            let mut m = Match::default();
+            m.phase = 1;
+            let mut seen = vec![];
+            for t in 0..150 {
+                m.step([if t % 6 < 3 { button } else { 0 }, 0]);
+                let a = m.fighters[0].action;
+                if a != 0 && seen.last() != Some(&a) {
+                    seen.push(a);
+                }
+            }
+            seen
+        };
+        let punches = mash(LIGHT);
+        assert!(punches.starts_with(&[1, 11, 17, 1]), "J-J-J-J: {punches:?}");
+        let kicks = mash(KICK);
+        // The roundhouse after a whiffed side kick only starts once it recovers.
+        assert!(kicks.starts_with(&[8, 18, 12, 8]), "U-U-U-U: {kicks:?}");
     }
     #[test]
     fn light_strings_continue_on_block() {

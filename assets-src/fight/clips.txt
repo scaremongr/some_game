@@ -48,3 +48,16 @@ smash = 146 Hard Floor Stomp.glb
 block = 085 High Center Block.glb
 # Quick low kick from a crouch.
 low_kick = 054 Mma Low Kick.glb
+# Strings: J-J-J ends with a lead hook, U-U with a side kick.
+hook = 032 Boxing Lead Hand Hook.glb
+side_kick = 056 Mma Side Kick.glb
+# Hit reactions by blow: light jab, hook from the side, counter hit spins,
+# side kick doubles over.
+hit_light = 090 Receiving A Light Hit To The Head From A Straight Punch.glb
+hit_side = 095 Receiving A Medium Hit To The Head From A Right Punch.glb
+hit_spin = 097 Receiving A Big Hit To The Head From A Left Punch.glb
+gut_big = 100 Receiving A Big Hit In The Stomach.glb
+# More endings: the round number picks one.
+victory2 = 136 Rallying The Crowd To Make Them Cheer.glb @ 0-5
+victory3 = 156 Celebrating After A Win.glb @ 0-6
+defeat2 = 137 Showing Frustration After A Loss.glb @ 0-5

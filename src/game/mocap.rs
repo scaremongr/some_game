@@ -243,7 +243,9 @@ pub fn strike_limb(key: &str) -> Option<(usize, bool)> {
         _ => {}
     }
     match key.split('_').next().unwrap_or(key) {
-        "jab" | "special" => Some((1, false)),
+        "jab" | "special" | "hook" => Some((1, false)),
+        // The side kick drives the lead foot out.
+        "side" => Some((3, false)),
         "kick" => Some((3, false)),
         "cross" => Some((2, false)),
         // A rising lead-hand uppercut.

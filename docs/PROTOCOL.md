@@ -89,7 +89,8 @@ Frame data (startup, active, recovery, reach, height, damage, stun, costs) lives
 in `combat/src/moves.rs` and also drives animation timing. Action IDs:
 0 idle, 1 jab, 2 overhead, 3 dash, 4 throw, 5 hitstun, 8 kick, 9 sweep,
 10 uppercut, 11 cross, 12 roundhouse, 13 air kick, 14 special, 15 knockdown,
-16 low kick (crouch + jab), 19 room smash. IDs 6, 7, 17, 18 are unused.
+16 low kick (crouch + jab), 17 hook (third jab of J-J-J), 18 side kick (second
+kick of U-U), 19 room smash. IDs 6 and 7 are unused.
 
 Fighters add `crouch`, `meter` (0..1000), `blockstun`, `down`, `invulnerable`,
 `juggle`, `combo_damage`, `confirmed`, `prop_hit`, `air_attack`, `held` (ticks
@@ -107,6 +108,8 @@ of hitstun; punish events identify hits during attack recovery. Only the back
 dash slips through attacks (frames 2–8). The rising uppercut is out of reach of
 high and air attacks while it rises.
 
+A repeated button continues its string even on a whiff, once the active frames
+end (`moves::string`: J-J-J jab, cross, hook; U-U front kick, side kick).
 J-J-U chains jab/cross/roundhouse; crouch-J then crouch-K or crouch-U continues
 a low kick into the uppercut or the sweep. U-K and crouch-K launch with an
 uppercut. On block J-J, J-U, J(cross)-U and low-J continue. Combo damage scales

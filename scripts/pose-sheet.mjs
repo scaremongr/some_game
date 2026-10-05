@@ -11,8 +11,8 @@ process.env.PLAYWRIGHT_BROWSERS_PATH ||= resolve('.browsers');
 const { chromium } = await import('playwright');
 
 const [specPath, prefix = 'artifacts/poses/sheet'] = process.argv.slice(2);
-const attacks = {1:[7,20],11:[6,24],2:[21,47],4:[13,40],8:[11,30],9:[14,42],10:[12,46],12:[12,38],13:[7,28],14:[18,46],16:[8,24],19:[18,44]};
-const names = {1:'jab',11:'cross',2:'overhead',4:'throw',8:'front kick',9:'sweep',10:'uppercut',12:'roundhouse',13:'air kick',14:'impulse',16:'low kick',19:'ground pound'};
+const attacks = {1:[7,20],11:[6,24],2:[21,47],4:[13,40],8:[11,30],9:[14,42],10:[12,46],12:[12,38],13:[7,28],14:[18,46],16:[8,24],17:[8,28],18:[12,34],19:[18,44]};
+const names = {1:'jab',11:'cross',2:'overhead',4:'throw',8:'front kick',9:'sweep',10:'uppercut',12:'roundhouse',13:'air kick',14:'impulse',16:'low kick',17:'hook',18:'side kick',19:'ground pound'};
 function defaultSpec() {
   const shots = [
     { label: 'stance', f0: {}, f1: {} },

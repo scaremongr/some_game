@@ -66,6 +66,11 @@ pub fn attack(action: u32) -> Option<Move> {
         14 => (18, 5, 46, 2150, 20, 34, 26, 160, 190, 55, Mid, true),
         // Quick low kick from a crouch: opens a standing guard, no knockdown.
         16 => (8, 3, 24, 1450, 5, 20, 12, 60, 20, 0, Low, false),
+        // Third punch of J-J-J: a lead hook, a little push.
+        17 => (8, 3, 28, 1200, 8, 26, 14, 60, 70, 0, Mid, false),
+        // Second kick of U-U: a side kick that drives the opponent back
+        // (towards a wall or the next room); safe by distance on block.
+        18 => (12, 4, 34, 1720, 9, 28, 16, 100, 150, 0, Mid, false),
         19 => (18, 3, 44, 950, 12, 24, 10, 140, 45, 0, Mid, false),
         _ => return None,
     };
@@ -86,23 +91,31 @@ pub fn attack(action: u32) -> Option<Move> {
 }
 /// Follow-ups allowed once the attack has hit.
 pub fn cancel(action: u32, next: u32) -> bool {
-    matches!(
-        (action, next),
-        (1, 11)
-            | (1, 2)
-            | (1, 8)
-            | (11, 12)
-            | (11, 10)
-            | (8, 10)
-            | (8, 14)
-            | (11, 14)
-            | (16, 1)
-            | (16, 9)
-            | (16, 10)
-    )
+    string(action, next)
+        || matches!(
+            (action, next),
+            (1, 2)
+                | (1, 8)
+                | (11, 12)
+                | (11, 10)
+                | (11, 14)
+                | (8, 10)
+                | (8, 14)
+                | (17, 10)
+                | (18, 12)
+                | (16, 1)
+                | (16, 9)
+                | (16, 10)
+        )
 }
 /// Follow-ups allowed when the attack was blocked: light strings keep the
 /// pressure; the defender can interrupt the gap before a slower ender.
 pub fn block_cancel(action: u32, next: u32) -> bool {
-    matches!((action, next), (1, 11) | (1, 8) | (11, 12) | (16, 1))
+    string(action, next) || matches!((action, next), (1, 8) | (11, 12) | (16, 1))
+}
+/// Strings: pressing the same button again continues with a different move
+/// even on a whiff (J-J-J jab, cross, hook; U-U front kick, side kick).
+/// On a whiff the next move waits for the active frames to end.
+pub fn string(action: u32, next: u32) -> bool {
+    matches!((action, next), (1, 11) | (11, 17) | (8, 18))
 }

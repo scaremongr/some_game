@@ -15,6 +15,7 @@ pub mod body;
 pub mod effects;
 pub mod fighter_model;
 pub mod mocap;
+pub mod ragdoll;
 pub mod arena_props;
 pub mod timeline;
 
