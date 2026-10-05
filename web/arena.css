@@ -170,6 +170,10 @@ body:not(.fighting) #combo-readout{display:none}
 .act.special.charged{background:#6a4a26f0;color:#ffe3a6;border-color:var(--gold);box-shadow:0 0 18px #e9bc7360,0 6px 18px #0006}
 .act.special.breaker{background:#7a2d52f0;color:#ffd1ea;border-color:#ff8ccf;box-shadow:0 0 22px #ff8ccf70}
 .act.pressed{filter:brightness(1.55);transform:scale(.93)}
+.act.alt span{color:#fff;text-shadow:0 0 8px currentColor}
+.act.heavy.alt,.act.jab.alt,.act.kick.alt{border-style:dashed}
+.act.grab.alt{background:#6b2f8ef0;color:#fff;border-color:#d7a8ff;box-shadow:0 0 22px #c48cffa0;animation:tech .35s ease-in-out infinite alternate}
+@keyframes tech{to{transform:scale(1.08)}}
 
 /* Mouse and keyboard: keep hints, smaller pad above the bottom tool row. */
 body:not(.touch){--b:62px}

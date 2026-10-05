@@ -2,7 +2,8 @@
 //   node scripts/fight-video.mjs [out-dir] [scenario]
 // Scenarios: moves (default) — walking, strings, jumps, specials against the dummy;
 // air — throws, jumps in every direction, air kick, blocking; ground — crouch,
-// crouch walk and guard, room smash; spar; ko. FIGHTER=<id> picks the fighter.
+// crouch walk and guard, room smash; defense — blocks, lows, overhead and the
+// low kick -> uppercut against the guard dummy; spar; ko. FIGHTER=<id> picks the fighter.
 import { mkdir, readdir, rename } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { createArena } from '../server/index.mjs';
@@ -61,6 +62,25 @@ try {
     await hold(['c', 's'], 900); await p.waitForTimeout(300);
     await tap('q'); await p.waitForTimeout(1200);
     await hold(['d'], 500); await tap('q'); await p.waitForTimeout(1400);
+  } else if (scenario === 'defense') {
+    // Guard dummy: strings into the standing guard, a low kick under it; the
+    // crouching guard stops the low but not the overhead; then the low kick ->
+    // uppercut and holding block against the sparring bot. Blocked blows push
+    // the dummy back, so each attack starts with a step in.
+    const step = () => hold(['d'], 260);
+    await p.click('#training-mode');
+    await hold(['d'], 600);
+    await tap('j'); await p.waitForTimeout(120); await tap('j'); await p.waitForTimeout(700);
+    await step(); await tap('u'); await p.waitForTimeout(800);
+    await step(); await hold(['c', 'j'], 120); await p.waitForTimeout(800);
+    await p.click('#training-mode');
+    await step(); await hold(['c', 'j'], 120); await p.waitForTimeout(800);
+    await step(); await hold(['c', 'u'], 120); await p.waitForTimeout(1000);
+    await step(); await tap('k'); await p.waitForTimeout(1500);
+    await p.click('#training-mode'); await p.click('#training-mode');
+    await step(); await hold(['c', 'j'], 120); await p.waitForTimeout(220); await hold(['c', 'k'], 120); await p.waitForTimeout(1800);
+    await p.click('#training-mode'); await p.click('#training-mode'); await p.click('#training-mode');
+    await hold(['s'], 4500);
   } else if (scenario === 'spar') {
     await p.click('#training-mode'); await p.click('#training-mode'); await p.click('#training-mode');
     for (let i = 0; i < 14; i++) { await hold(['d'], 350); await tap(['j', 'k', 'u', 'l'][i % 4]); await p.waitForTimeout(600); }

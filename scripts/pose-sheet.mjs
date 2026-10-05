@@ -11,8 +11,8 @@ process.env.PLAYWRIGHT_BROWSERS_PATH ||= resolve('.browsers');
 const { chromium } = await import('playwright');
 
 const [specPath, prefix = 'artifacts/poses/sheet'] = process.argv.slice(2);
-const attacks = {1:[7,24],11:[6,25],2:[21,49],4:[13,40],8:[11,32],9:[16,43],10:[13,45],12:[12,40],13:[7,28],14:[18,53],19:[18,44]};
-const names = {1:'jab',11:'cross',2:'overhead',4:'throw',8:'front kick',9:'sweep',10:'uppercut',12:'roundhouse',13:'air kick',14:'impulse',19:'ground pound'};
+const attacks = {1:[7,20],11:[6,24],2:[21,47],4:[13,40],8:[11,30],9:[14,42],10:[12,46],12:[12,38],13:[7,28],14:[18,46],16:[8,24],19:[18,44]};
+const names = {1:'jab',11:'cross',2:'overhead',4:'throw',8:'front kick',9:'sweep',10:'uppercut',12:'roundhouse',13:'air kick',14:'impulse',16:'low kick',19:'ground pound'};
 function defaultSpec() {
   const shots = [
     { label: 'stance', f0: {}, f1: {} },
@@ -38,7 +38,7 @@ function defaultSpec() {
         f0: victim === 0 ? f : { action: attack, frame: 14 }, f1: victim === 1 ? f : { action: attack, frame: 14 } });
     }
   for (const [vy, label] of [[50, 'air hit up'], [-50, 'air hit down']]) shots.push({ label, f0: {}, f1: { action: 5, stun: 20, frame: 8, y: 600, vy } });
-  for (const frame of [2, 14, 30, 44, 58, 68]) shots.push({ label: `knockdown f${frame}`, f0: {}, f1: { action: 15, down: 72 - frame, frame } });
+  for (const frame of [2, 14, 24, 34, 44, 52]) shots.push({ label: `knockdown f${frame}`, f0: {}, f1: { action: 15, down: 56 - frame, frame } });
   for (const frame of [6, 16, 24, 40]) shots.push({ label: `KO f${frame}`, f0: {}, f1: { hp: 0, frame }, phase: 2 });
   shots.push({ label: 'victory', f0: { frame: 40 }, f1: { hp: 0, frame: 40 }, phase: 2, state: { winner: 0 } });
   shots.push({ label: 'defeat (timeout)', f0: { frame: 40 }, f1: { frame: 40, hp: 30 }, phase: 2, state: { winner: 0 } });

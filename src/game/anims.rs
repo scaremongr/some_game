@@ -488,7 +488,7 @@ impl Reaction {
     pub fn from_attack(action: u32) -> Reaction {
         match action {
             8 | 14 | 19 => Reaction::Gut,
-            9 => Reaction::Low,
+            9 | 16 => Reaction::Low,
             _ => Reaction::Head,
         }
     }
@@ -508,7 +508,7 @@ pub fn striker(action: u32) -> usize {
         2 | 10 | 11 => 1,
         4 | 14 | 19 => 4,
         8 | 13 => 2,
-        9 | 12 => 3,
+        9 | 12 | 16 => 3,
         _ => 0,
     }
 }
@@ -535,6 +535,7 @@ pub fn library() -> Library {
     attacks[13] = Some(air_kick());
     attacks[14] = Some(impulse());
     attacks[19] = Some(ground_pound());
+    attacks[16] = Some(low_kick());
     let reach = (0..20u32)
         .map(|action| {
             let (Some(anim), Some(m)) = (&attacks[action as usize], moves::attack(action)) else {
@@ -610,7 +611,7 @@ fn jab() -> Anim {
         key(8.0, whip).out(),
         key(10.0, hit),
         key(14.0, back).out(),
-        key(24.0, s),
+        key(20.0, s),
     ])
     .with_lead(STRIKE)
 }
@@ -655,7 +656,7 @@ fn cross() -> Anim {
         key(7.0, whip).out(),
         key(9.0, hit),
         key(15.0, back).out(),
-        key(25.0, s),
+        key(24.0, s),
     ])
     .with_lead(STRIKE)
 }
@@ -736,8 +737,8 @@ fn overhead() -> Anim {
         key(21.0, hit).snap(),
         key(23.0, follow).out(),
         key(27.0, through),
-        key(37.0, recover),
-        key(49.0, s),
+        key(36.0, recover),
+        key(47.0, s),
     ])
     .with_lead(STRIKE)
 }
@@ -830,8 +831,8 @@ fn front_kick() -> Anim {
         key(12.0, hit.with(|p| p.foot[L].z += 0.04)).out(),
         key(15.0, hit),
         key(20.0, chamber.with(|p| p.foot[L] = v(0.08, 0.50, 0.34))).out(),
-        key(26.0, s.with(|p| p.foot[L] = v(0.12, 0.03, 0.32))),
-        key(32.0, s),
+        key(25.0, s.with(|p| p.foot[L] = v(0.12, 0.03, 0.32))),
+        key(30.0, s),
     ])
     .with_lead(STRIKE)
 }
@@ -889,13 +890,13 @@ fn sweep() -> Anim {
     });
     Anim::new(vec![
         key(0.0, s),
-        key(5.0, drop).out(),
-        key(9.0, wind),
-        key(13.0, side).ease_in(),
-        key(16.0, hit).snap(),
-        key(19.0, through).out(),
-        key(30.0, retract),
-        key(43.0, s),
+        key(4.0, drop).out(),
+        key(8.0, wind),
+        key(11.0, side).ease_in(),
+        key(14.0, hit).snap(),
+        key(17.0, through).out(),
+        key(29.0, retract),
+        key(42.0, s),
     ])
     .with_lead(STRIKE)
 }
@@ -938,18 +939,18 @@ fn uppercut() -> Anim {
     Anim::new(vec![
         key(0.0, s),
         key(5.0, coil).out(),
-        key(9.0, coil.with(|p| {
+        key(8.0, coil.with(|p| {
             p.hips.y = 0.64;
             p.hand[R] = v(-0.14, 0.82, 0.12);
         })),
-        key(13.0, hit).snap(),
-        key(15.0, over).out(),
-        key(18.0, over),
+        key(12.0, hit).snap(),
+        key(14.0, over).out(),
+        key(17.0, over),
         key(28.0, s.with(|p| {
             p.hips.y = 0.84;
             p.hand[R] = v(-0.08, 1.35, 0.26);
         })),
-        key(45.0, s),
+        key(46.0, s),
     ])
     .with_lead(STRIKE)
 }
@@ -1010,12 +1011,52 @@ fn roundhouse() -> Anim {
         key(12.0, hit).snap(),
         key(13.0, over).out(),
         key(17.0, through),
-        key(25.0, recoil),
-        key(32.0, s.with(|p| p.foot[R] = v(-0.19, 0.05, -0.24))),
-        key(40.0, s),
+        key(24.0, recoil),
+        key(31.0, s.with(|p| p.foot[R] = v(-0.19, 0.05, -0.24))),
+        key(38.0, s),
     ])
     .with_lead(STRIKE)
 }
+fn low_kick() -> Anim {
+    let s = base();
+    // Out of the crouch the weight settles on the lead leg and the rear foot
+    // snaps out low, at the shin.
+    let set = s.with(|p| {
+        p.hips = v(0.0, 0.70, -0.02);
+        p.pelvis = v(-0.60, 0.22, 0.0);
+        p.torso = v(0.12, 0.32, 0.02);
+        p.head = v(-0.05, -0.12, 0.0);
+        p.hand[L] = v(0.14, 1.06, 0.28);
+        p.hand[R] = v(-0.08, 1.08, 0.16);
+        p.foot[R] = v(-0.22, 0.03, -0.26);
+        p.foot_rot[R] = v(-0.9, 0.5, 0.0);
+        p.knee = [v(0.6, 0.1, 1.0), v(-0.7, 0.0, 0.5)];
+    });
+    let hit = s.with(|p| {
+        p.hips = v(0.0, 0.68, 0.08);
+        p.pelvis = v(0.30, 0.12, 0.0);
+        p.torso = v(-0.12, 0.28, -0.06);
+        p.head = v(0.05, -0.10, 0.0);
+        p.hand[L] = v(0.18, 1.08, 0.30);
+        p.hand[R] = v(-0.10, 1.10, 0.12);
+        p.foot[L] = v(0.12, 0.004, 0.24);
+        p.knee[L] = v(0.6, 0.1, 1.0);
+        p.foot[R] = v(-0.04, 0.12, 0.90);
+        p.foot_rot[R] = v(0.0, -0.4, 0.0);
+        p.knee[R] = v(0.0, 1.0, 0.25);
+    });
+    Anim::new(vec![
+        key(0.0, s),
+        key(4.0, set).out(),
+        key(8.0, hit).snap(),
+        key(9.0, hit.with(|p| p.foot[R].z += 0.04)).out(),
+        key(11.0, hit),
+        key(17.0, set),
+        key(24.0, s),
+    ])
+    .with_lead(STRIKE)
+}
+
 
 fn air_kick() -> Anim {
     let air = jump(0.0, 0.0);
@@ -1095,11 +1136,11 @@ fn impulse() -> Anim {
         }))
         .out(),
         key(24.0, hit),
-        key(38.0, s.with(|p| {
+        key(34.0, s.with(|p| {
             p.hips.z = 0.06;
             p.foot[L] = v(0.12, 0.02, 0.36);
         })),
-        key(53.0, s),
+        key(46.0, s),
     ])
     .with_lead(STRIKE)
 }

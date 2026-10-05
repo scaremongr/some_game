@@ -246,9 +246,11 @@ pub fn strike_limb(key: &str) -> Option<(usize, bool)> {
         "jab" | "special" => Some((1, false)),
         "kick" => Some((3, false)),
         "cross" => Some((2, false)),
-        "uppercut" => Some((2, true)),
-        // The heavy attack is a spinning back kick with the rear foot.
-        "roundhouse" | "sweep" | "heavy" => Some((4, false)),
+        // A rising lead-hand uppercut.
+        "uppercut" => Some((1, true)),
+        // The heavy attack is a spinning back kick with the rear foot; the
+        // low kick snaps the rear foot at the shin.
+        "roundhouse" | "sweep" | "heavy" | "low" => Some((4, false)),
         _ => None,
     }
 }

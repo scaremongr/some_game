@@ -19,9 +19,15 @@ pub const SMASH: u32 = 2048;
 pub const INPUT_MASK: u32 = 4095;
 pub const EDGE_MASK: u32 = LIGHT | HEAVY | DASH | THROW | KICK | JUMP | SPECIAL | SMASH;
 /// Ticks on the floor after a knockdown, including the visible wake-up.
-pub const KNOCKDOWN: u32 = 72;
+pub const KNOCKDOWN: u32 = 56;
+/// A guard raised this many ticks before the blow parries it.
+pub const PARRY: u32 = 6;
+/// After lowering the guard, raising it again within this many ticks blocks
+/// without the parry window: tapping the button is not a free parry.
+pub const PARRY_COOLDOWN: u32 = 18;
 use room::ARENA_LIMIT;
-// action: 0 idle, 1 jab, 2 heavy, 3 dash, 4 throw, 5 stun
+use moves::TECH;
+// action: 0 idle, 1 jab, 2 heavy, 3 dash, 4 throw, 5 stun (see PROTOCOL.md)
 #[derive(Clone, Debug, SerJson, DeJson)]
 pub struct Fighter {
     pub x: i32,
@@ -63,9 +69,15 @@ pub struct Fighter {
     /// lifted and thrown; on the floor (knocked down) when it reaches 0.
     #[nserde(default)]
     pub held: u32,
+    /// Ticks until a raised guard gets its parry window again.
+    #[nserde(default)]
+    pub parry_cooldown: u32,
 }
 /// A throw holds its victim this long, from the grab to the slam.
 pub const HOLD: u32 = 32;
+/// The slammed victim starts its knockdown this far in (it lands on the
+/// floor out of the grip, not from standing).
+pub const THROWN_EARLY: u32 = 14;
 /// Distance between the thrower and the held victim (mm).
 const HOLD_DISTANCE: i32 = 600;
 impl Fighter {
@@ -105,6 +117,7 @@ impl Fighter {
             prop_hit: false,
             air_attack: false,
             held: 0,
+            parry_cooldown: 0,
         }
     }
 }
@@ -140,7 +153,8 @@ pub struct Match {
     pub winner: i32,
     pub freeze: u32,
     pub event: u32,
-    // 1 hit, 2 block, 3 parry, 4 guard break, 5 throw, 6 counter
+    // 1 hit, 2 block, 3 parry, 4 guard break, 5 grab, 6 counter, 7 punish,
+    // 8 combo breaker, 9 throw broken (tech), 10 throw slam
     pub event_kind: u32,
     pub event_target: usize,
     pub seed: u32,
@@ -187,9 +201,13 @@ impl Match {
         let distance = (self.fighters[0].x - self.fighters[1].x).abs();
         let toward = if side == 0 { RIGHT } else { LEFT };
         let away = if side == 0 { LEFT } else { RIGHT };
-        let enemy = &self.fighters[1 - side];
-        let me = &self.fighters[side];
-        if me.stun > 0 && me.meter >= 1000 && self.tick % 17 == 0 {
+        let enemy = self.fighters[1 - side].clone();
+        let me = self.fighters[side].clone();
+        // Grabbed: breaks the throw about one time in three.
+        if me.held > 0 {
+            return if me.held == HOLD - 3 && self.random() % 3 == 0 { THROW } else { 0 };
+        }
+        if (me.stun > 0 || (me.juggle > 0 && me.y > 0)) && me.meter >= 1000 && self.tick % 17 == 0 {
             return BLOCK | DASH;
         }
         if me.confirmed {
@@ -199,14 +217,22 @@ impl Match {
             if me.action == 11 && me.frame >= 8 {
                 return KICK;
             }
+            if me.action == 16 && me.frame >= 10 && distance < 1150 {
+                return CROUCH | HEAVY;
+            }
         }
         if me.y > 200 && distance < 1500 {
             return KICK;
         }
-        if attack(enemy.action).is_some_and(|m| enemy.frame > 6 && enemy.frame < m.startup)
-            && self.tick % 5 != 0
-        {
-            return BLOCK | if enemy.action == 9 { CROUCH } else { 0 };
+        // Anti-air: a jump into range meets the rising uppercut.
+        if enemy.y > 250 && me.y == 0 && distance < 1700 && self.tick % 3 != 0 {
+            return CROUCH | HEAVY;
+        }
+        // Reads the wind-up and guards at the right height.
+        if let Some(m) = attack(enemy.action) {
+            if enemy.frame > 5 && enemy.frame < m.startup && m.height != Height::Grab && self.tick % 5 != 0 {
+                return BLOCK | if m.height == Height::Low { CROUCH } else { 0 };
+            }
         }
         if distance > 1450 {
             return toward;
@@ -218,7 +244,7 @@ impl Match {
             return if distance < 700 { away } else { 0 };
         }
         let meter = me.meter;
-        match self.random() % 12 {
+        match self.random() % 14 {
             0 => away | DASH,
             1 if distance < 1000 => THROW,
             2 => CROUCH | KICK,
@@ -227,6 +253,7 @@ impl Match {
             5 if meter >= 500 => SPECIAL,
             6 => HEAVY,
             7..=8 => KICK,
+            9 => CROUCH | LIGHT,
             _ => LIGHT,
         }
     }
@@ -254,6 +281,25 @@ impl Match {
             }
         }
         moving
+    }
+    /// A broken throw (tech or two grabs at once): no damage, both fighters
+    /// stagger apart and the exchange starts over from neutral.
+    fn break_throw(&mut self, victim: usize) {
+        for f in &mut self.fighters {
+            f.held = 0;
+            f.down = 0;
+            f.action = 5;
+            f.frame = 0;
+            f.stun = 14;
+            f.vx = -f.facing * 75;
+            f.guard = false;
+            f.crouch = false;
+            f.buffer_time = 0;
+        }
+        self.event += 1;
+        self.event_kind = 9;
+        self.event_target = victim;
+        self.freeze = 6;
     }
     pub fn step(&mut self, inputs: [u32; 2]) {
         if self.phase == 3 {
@@ -305,17 +351,20 @@ impl Match {
         self.remaining = self.remaining.saturating_sub(1);
         self.physics();
         let mut breaker = None;
+        let mut tech = None;
+        let mut slam = None;
         for i in 0..2 {
             let f = &mut self.fighters[i];
             let input = inputs[i] & INPUT_MASK;
             f.invulnerable = f.invulnerable.saturating_sub(1);
+            f.parry_cooldown = f.parry_cooldown.saturating_sub(1);
             f.combo_time = f.combo_time.saturating_sub(1);
             if f.combo_time == 0 {
                 f.combo = 0;
                 f.combo_damage = 0;
             }
             // A full bar buys one defensive escape; not available once grounded.
-            if f.stun > 0
+            if (f.stun > 0 || (f.juggle > 0 && f.y > 0))
                 && f.down == 0
                 && f.meter >= 1000
                 && f.buffer_time > 0
@@ -334,17 +383,24 @@ impl Match {
                 continue;
             }
             if f.held > 0 {
-                // In the thrower's grip: no control; slammed down at the end.
+                // In the thrower's grip: THROW right after the grab breaks
+                // free; otherwise no control and slammed down at the end.
+                if f.held > HOLD - TECH && f.buffer_time > 0 && f.buffered & THROW != 0 {
+                    tech = Some(i);
+                    continue;
+                }
                 f.held -= 1;
                 f.frame += 1;
                 f.action = 5;
                 f.guard = false;
                 f.crouch = false;
                 if f.held == 0 {
-                    f.down = KNOCKDOWN;
+                    // Already on the floor from the grip: a shorter lie.
+                    f.down = KNOCKDOWN - THROWN_EARLY;
                     f.action = 15;
                     f.frame = 0;
                     f.vx = -f.facing * 30;
+                    slam = Some(i);
                 }
                 continue;
             }
@@ -362,8 +418,10 @@ impl Match {
                 }
                 continue;
             }
-            if f.stun > 0 {
-                f.stun -= 1;
+            if f.stun > 0 || (f.juggle > 0 && f.y > 0) {
+                // Hit in the air: no control until the body lands (and is
+                // knocked down), so a launch is not escaped by an air attack.
+                f.stun = f.stun.saturating_sub(1);
                 f.frame += 1;
                 f.action = 5;
                 f.guard = false;
@@ -389,9 +447,13 @@ impl Match {
                 if f.action == 3 && f.frame < 11 {
                     f.x += f.dash_dir * 72;
                 }
-                let cancel = f.confirmed
-                    && attack(f.action).is_some_and(|m| f.frame >= m.startup + 2)
-                    && moves::cancel(f.action, candidate);
+                // Strings continue on hit; light strings also on block.
+                let cancel = attack(f.action).is_some_and(|m| f.frame >= m.startup + 2)
+                    && if f.confirmed {
+                        moves::cancel(f.action, candidate)
+                    } else {
+                        f.connected && moves::block_cancel(f.action, candidate)
+                    };
                 if cancel || f.frame >= duration(f.action) {
                     f.action = 0;
                     f.frame = 0;
@@ -400,12 +462,16 @@ impl Match {
             let was_guard = f.guard;
             f.crouch = f.y == 0 && f.action == 0 && input & CROUCH != 0;
             f.guard = f.action == 0 && f.y == 0 && input & BLOCK != 0;
-            f.guard_age = if f.guard {
-                if was_guard {
-                    f.guard_age + 1
-                } else {
-                    0
-                }
+            if was_guard && !f.guard {
+                f.parry_cooldown = PARRY_COOLDOWN;
+            }
+            f.guard_age = if !f.guard {
+                0
+            } else if was_guard {
+                f.guard_age + 1
+            } else if f.parry_cooldown > 0 {
+                // Raised again too soon: a plain block, no parry window.
+                PARRY
             } else {
                 0
             };
@@ -432,6 +498,8 @@ impl Match {
                         if candidate == 14 {
                             f.meter -= 500;
                         }
+                        // Acting ends the wake-up (or breaker) protection.
+                        f.invulnerable = 0;
                         f.action = candidate;
                         f.frame = 0;
                         f.connected = false;
@@ -462,6 +530,23 @@ impl Match {
             self.event_target = side;
             self.freeze = 6;
         }
+        if let Some(victim) = tech {
+            self.break_throw(victim);
+        }
+        if let Some(victim) = slam {
+            // The throw's damage lands with the body.
+            let dealt = attack(4).map_or(0, |m| m.damage);
+            let thrower = &mut self.fighters[1 - victim];
+            thrower.meter = (thrower.meter + dealt * 6).min(1000);
+            thrower.combo_damage = dealt;
+            let f = &mut self.fighters[victim];
+            f.hp = (f.hp - dealt).max(0);
+            f.meter = (f.meter + dealt * 8).min(1000);
+            self.event += 1;
+            self.event_kind = 10;
+            self.event_target = victim;
+            self.freeze = 4;
+        }
         // Fighters cannot cross; facing and control direction stay predictable on phones.
         if self.fighters[1].x - self.fighters[0].x < 600 {
             let mid = ((self.fighters[0].x + self.fighters[1].x) / 2).clamp(
@@ -473,6 +558,7 @@ impl Match {
         }
         // Resolve both intents from the same pre-hit state: simultaneous hits trade.
         let before = self.fighters.clone();
+        let mut clash = false;
         for side in 0..2 {
             let a = &before[side];
             let d = &before[1 - side];
@@ -505,20 +591,34 @@ impl Match {
                 );
                 self.fighters[side].prop_hit = true;
             }
+            // Only the back dash slips through attacks; the forward dash is
+            // a committed approach.
+            let backdash = d.action == 3 && d.dash_dir != d.facing && (2..=8).contains(&d.frame);
             if a.connected
+                || clash
                 || d.invulnerable > 0
                 || d.down > 0
                 || d.juggle >= 4
                 || (a.x - d.x).abs() > m.reach
-                || (d.action == 3 && (2..=10).contains(&d.frame))
+                || backdash
             {
                 continue;
             }
+            // The rising uppercut is out of reach of high and air attacks.
+            let rising = d.action == 10 && attack(10).is_some_and(|u| d.frame >= 1 && d.frame < u.startup + u.active);
             if (m.height == Height::High && d.crouch && !d.guard)
                 || (m.height == Height::Low && d.y > 160)
-                || (m.height == Height::Grab && (d.y > 0 || d.stun > 0))
+                // No throws on a body in the air, reeling or blocking.
+                || (m.height == Height::Grab && (d.y > 0 || d.stun > 0 || d.blockstun > 0 || d.held > 0))
+                || (rising && (a.y > 0 || m.height == Height::High))
                 || (a.y - d.y).abs() > if a.action == 10 { 1800 } else { 950 }
             {
+                continue;
+            }
+            // Two grabs at once break each other.
+            if m.height == Height::Grab && d.action == 4 && d.frame >= m.startup && d.frame < m.startup + m.active {
+                clash = true;
+                self.break_throw(1 - side);
                 continue;
             }
             self.fighters[side].connected = true;
@@ -529,17 +629,20 @@ impl Match {
                 && !(m.height == Height::Low && !d.crouch)
                 && !(m.height == Height::Overhead && d.crouch);
             if blocked {
-                if d.guard_age < 6 && d.blockstun == 0 {
+                if d.guard_age < PARRY && d.blockstun == 0 {
                     self.event_kind = 3;
-                    self.fighters[side].stun = 30;
+                    self.fighters[side].stun = 24;
                     self.fighters[side].action = 5;
                     self.fighters[side].frame = 0;
-                    self.fighters[1 - side].meter = (d.meter + 130).min(1000);
+                    self.fighters[1 - side].meter = (d.meter + 100).min(1000);
+                    self.freeze = 8;
                 } else {
                     let defender = &mut self.fighters[1 - side];
-                    defender.stamina = (defender.stamina - m.damage * 15).max(0);
+                    // Blocking costs stamina: long pressure can still break
+                    // the guard, but not two blocked strings.
+                    defender.stamina = (defender.stamina - m.damage * 10).max(0);
                     defender.blockstun = m.blockstun;
-                    defender.vx = a.facing * 18;
+                    defender.vx = a.facing * (m.push / 4).max(18);
                     self.event_kind = 2;
                     if defender.stamina == 0 {
                         self.event_kind = 4;
@@ -548,8 +651,8 @@ impl Match {
                         defender.guard = false;
                         defender.action = 5;
                     }
+                    self.freeze = 4;
                 }
-                self.freeze = 5;
             } else {
                 // Chains are true only while the victim is still in hitstun/airborne.
                 let chain = if d.stun > 0 || (d.y > 0 && d.juggle > 0) {
@@ -562,9 +665,14 @@ impl Match {
                 let dealt = (m.damage + if counter { 3 } else { 0 })
                     * (100 - chain as i32 * 13).max(35)
                     / 100;
+                let grab = a.action == 4;
                 let defender = &mut self.fighters[1 - side];
-                defender.hp = (defender.hp - dealt).max(0);
-                defender.stun = m.stun;
+                if !grab {
+                    defender.hp = (defender.hp - dealt).max(0);
+                    defender.meter = (defender.meter + dealt * 8).min(1000);
+                }
+                // A counter hit stuns longer: room for a bigger follow-up.
+                defender.stun = m.stun + if counter { 6 } else { 0 };
                 defender.action = 5;
                 defender.frame = 0;
                 defender.guard = false;
@@ -572,7 +680,6 @@ impl Match {
                 defender.blockstun = 0;
                 defender.vx = a.facing * m.push;
                 defender.recoil_v = if m.damage >= 15 { 150 } else { 80 };
-                defender.meter = (defender.meter + dealt * 8).min(1000);
                 if m.launch > 0 || d.y > 0 {
                     defender.juggle += 1;
                     defender.vy = if defender.juggle >= 4 {
@@ -585,8 +692,10 @@ impl Match {
                     defender.down = KNOCKDOWN;
                     defender.stun = 0;
                 }
-                if a.action == 4 {
-                    // Grabbed: held in front of the thrower, then slammed.
+                if grab {
+                    // Grabbed: held in front of the thrower, then slammed
+                    // (damage on the slam). Only presses after the grab
+                    // count for breaking it.
                     defender.held = HOLD;
                     defender.stun = 0;
                     defender.down = 0;
@@ -594,6 +703,7 @@ impl Match {
                     defender.vx = 0;
                     defender.vy = 0;
                     defender.y = 0;
+                    defender.buffer_time = 0;
                 }
                 let attacker = &mut self.fighters[side];
                 attacker.combo = chain + 1;
@@ -604,8 +714,10 @@ impl Match {
                     attacker.combo_damage + dealt
                 };
                 attacker.confirmed = true;
-                attacker.meter = (attacker.meter + dealt * 6).min(1000);
-                self.event_kind = if a.action == 4 {
+                if !grab {
+                    attacker.meter = (attacker.meter + dealt * 6).min(1000);
+                }
+                self.event_kind = if grab {
                     5
                 } else if punish {
                     7
@@ -614,7 +726,13 @@ impl Match {
                 } else {
                     1
                 };
-                self.freeze = if m.damage >= 15 { 11 } else { 7 };
+                self.freeze = if grab {
+                    6
+                } else if m.damage >= 15 {
+                    9
+                } else {
+                    5
+                } + if counter { 2 } else { 0 };
             }
         }
         // A held victim hangs in the thrower's grip (from the tick it is grabbed).
@@ -780,6 +898,8 @@ fn select_action(f: &Fighter, bits: u32) -> u32 {
             13
         } else if f.action == 1 {
             11
+        } else if bits & CROUCH != 0 {
+            16
         } else {
             1
         };
@@ -948,7 +1068,9 @@ mod tests {
         assert!(m.fighters[0].stun > 0);
         let mut m = duel();
         run(&mut m, [THROW, BLOCK], 20);
-        assert_eq!(m.fighters[1].hp, 83);
+        assert_eq!(m.fighters[1].held > 0, true, "a held guard does not stop a grab");
+        run(&mut m, [0, BLOCK], 50);
+        assert_eq!(m.fighters[1].hp, 83, "the throw's damage lands with the slam");
     }
     #[test]
     fn thrown_body_lands_before_the_thrower_recovers() {
@@ -1194,6 +1316,208 @@ mod tests {
         assert_eq!(m.fighters[1].y, 0);
         assert_eq!(m.fighters[1].down, 0);
         assert!(m.fighters[1].invulnerable > 0);
+    }
+    /// Can `side` start a fresh LIGHT attack on the next tick?
+    fn can_start(m: &Match, side: usize, guard: u32) -> bool {
+        let mut trial = m.clone();
+        trial.fighters[side].previous = 0;
+        // A fresh attack, not a string continuing from the blocked one.
+        trial.fighters[side].connected = false;
+        trial.fighters[side].confirmed = false;
+        let mut inputs = [guard, guard];
+        inputs[side] = LIGHT;
+        trial.step(inputs);
+        attack(trial.fighters[side].action).is_some() && trial.fighters[side].frame == 0
+    }
+    /// Frame advantage of the attacker after `action` is blocked at 900 mm:
+    /// first tick the defender can act minus the attacker's (§3.3 of
+    /// docs/COMBAT_RESEARCH.md).
+    fn block_advantage(action: u32) -> i32 {
+        let mut m = duel();
+        m.fighters[0].x = -450;
+        m.fighters[1].x = 450;
+        m.fighters[0].action = action;
+        m.fighters[1].guard = true;
+        m.fighters[1].guard_age = 20;
+        let guard = BLOCK | if attack(action).unwrap().height == Height::Low { CROUCH } else { 0 };
+        let mut contact = 0;
+        let mut ready = [0i32; 2];
+        for t in 1..150 {
+            m.step([0, guard]);
+            if contact == 0 && m.event_kind == 2 {
+                contact = t;
+            }
+            if contact > 0 {
+                for side in 0..2 {
+                    if ready[side] == 0 && can_start(&m, side, if side == 1 { guard } else { 0 }) {
+                        ready[side] = t + 1;
+                    }
+                }
+                if ready[0] > 0 && ready[1] > 0 {
+                    break;
+                }
+            }
+        }
+        assert!(contact > 0, "action {action} was not blocked");
+        ready[1] - ready[0]
+    }
+    #[test]
+    fn block_advantage_matches_the_design() {
+        let mut report = String::new();
+        let mut adv = |action: u32| {
+            let a = block_advantage(action);
+            report += &format!("{action}:{a} ");
+            a
+        };
+        // Light pressure tools are slightly minus, enders are punishable.
+        let (jab, low, cross, kick) = (adv(1), adv(16), adv(11), adv(8));
+        let (special, heavy, sweep, uppercut, roundhouse) = (adv(14), adv(2), adv(9), adv(10), adv(12));
+        eprintln!("block advantage {report}");
+        assert!((-2..=0).contains(&jab), "jab {jab}");
+        assert!((-4..=-2).contains(&low), "low kick {low}");
+        assert!((-5..=-3).contains(&cross), "cross {cross}");
+        assert!((-5..=-3).contains(&kick), "kick {kick}");
+        assert!((-3..=0).contains(&special), "special {special}");
+        assert!(heavy <= -10, "heavy {heavy}");
+        assert!(sweep <= -12, "sweep {sweep}");
+        assert!(uppercut <= -16, "uppercut {uppercut}");
+        assert!(roundhouse <= -8, "roundhouse {roundhouse}");
+    }
+    #[test]
+    fn low_kick_opens_a_standing_guard_and_links_into_the_uppercut() {
+        let mut standing = duel();
+        run(&mut standing, [0, BLOCK], 10);
+        run(&mut standing, [CROUCH | LIGHT, BLOCK], 12);
+        assert_eq!(standing.fighters[0].action, 16);
+        assert!(standing.fighters[1].hp < 100, "a standing guard does not stop a low");
+        assert_eq!(standing.fighters[1].down, 0, "the low kick does not knock down");
+        let mut low = duel();
+        run(&mut low, [0, CROUCH | BLOCK], 10);
+        run(&mut low, [CROUCH | LIGHT, CROUCH | BLOCK], 20);
+        assert_eq!(low.fighters[1].hp, 100);
+        assert_eq!(low.event_kind, 2);
+        // On hit the low kick cancels into the rising uppercut, which launches.
+        let mut combo = duel();
+        run(&mut combo, [CROUCH | LIGHT, 0], 10);
+        run(&mut combo, [CROUCH | HEAVY, 0], 20);
+        assert_eq!(combo.fighters[0].combo, 2);
+        assert!(combo.fighters[1].y > 0 && combo.fighters[1].juggle > 0, "launched");
+    }
+    #[test]
+    fn rising_uppercut_beats_jump_ins_and_high_attacks() {
+        // A jump-in air kick meets the uppercut: the jumper is launched.
+        let mut m = duel();
+        m.fighters[0].x = -500;
+        m.fighters[1].x = 500;
+        m.fighters[0].y = 700;
+        m.fighters[0].vy = -10;
+        m.fighters[0].action = 13;
+        m.fighters[0].air_attack = true;
+        m.fighters[1].action = 10;
+        m.fighters[1].frame = 4;
+        run(&mut m, [0, 0], 14);
+        assert_eq!(m.fighters[1].hp, 100, "the uppercut slips the air kick");
+        assert!(m.fighters[0].hp < 100 && m.fighters[0].juggle > 0, "the jumper is launched");
+        // A jab into the rising uppercut whiffs; a mid kick does not.
+        let mut jab = duel();
+        jab.step([0, CROUCH | HEAVY]);
+        run(&mut jab, [LIGHT, 0], 20);
+        assert_eq!(jab.fighters[1].hp, 100);
+        assert!(jab.fighters[0].hp < 100);
+    }
+    #[test]
+    fn juggled_fighter_cannot_attack_before_landing() {
+        let mut m = duel();
+        m.fighters[1].y = 900;
+        m.fighters[1].vy = 20;
+        m.fighters[1].juggle = 1;
+        m.fighters[1].stun = 5;
+        for _ in 0..80 {
+            m.step([0, KICK]);
+            m.step([0, 0]);
+            assert_ne!(m.fighters[1].action, 13, "air kick out of a juggle");
+            if m.fighters[1].down > 0 {
+                return;
+            }
+        }
+        panic!("never landed");
+    }
+    #[test]
+    fn throws_break_on_a_quick_tech_and_never_hit_a_blocking_fighter() {
+        // THROW right after the grab: both stagger apart, nobody is hurt.
+        let mut m = duel();
+        run(&mut m, [THROW, 0], 16);
+        assert!(m.fighters[1].held > 0);
+        m.step([0, THROW]);
+        run(&mut m, [0, 0], 60);
+        assert_eq!(m.event_kind, 9);
+        assert_eq!(m.fighters[1].hp, 100);
+        assert_eq!(m.fighters[1].down, 0);
+        // Too late: the grip holds.
+        let mut late = duel();
+        run(&mut late, [THROW, 0], 16);
+        run(&mut late, [0, 0], 20);
+        late.step([0, THROW]);
+        run(&mut late, [0, 0], 60);
+        assert_eq!(late.fighters[1].hp, 83);
+        // A defender in blockstun cannot be grabbed.
+        let mut pressure = duel();
+        pressure.fighters[1].guard = true;
+        pressure.fighters[1].guard_age = 20;
+        pressure.fighters[1].blockstun = 12;
+        pressure.fighters[0].action = 4;
+        pressure.fighters[0].frame = 12;
+        run(&mut pressure, [0, BLOCK], 3);
+        assert_eq!(pressure.fighters[1].held, 0);
+    }
+    #[test]
+    fn tapping_block_does_not_parry_but_a_fresh_guard_does() {
+        let mut tapped = duel();
+        run(&mut tapped, [0, BLOCK], 4);
+        run(&mut tapped, [0, 0], 3);
+        run(&mut tapped, [LIGHT, 0], 4);
+        run(&mut tapped, [0, BLOCK], 8);
+        assert_eq!(tapped.event_kind, 2, "re-raised guard only blocks");
+        let mut fresh = duel();
+        run(&mut fresh, [LIGHT, 0], 4);
+        run(&mut fresh, [0, BLOCK], 8);
+        assert_eq!(fresh.event_kind, 3);
+    }
+    #[test]
+    fn attacking_on_wakeup_drops_the_protection() {
+        let mut m = duel();
+        m.fighters[0].down = 1;
+        m.step([0, 0]);
+        assert!(m.fighters[0].invulnerable > 0);
+        m.step([LIGHT, 0]);
+        assert_eq!(m.fighters[0].action, 1);
+        assert_eq!(m.fighters[0].invulnerable, 0);
+    }
+    #[test]
+    fn forward_dash_is_a_commitment_back_dash_evades() {
+        let mut forward = duel();
+        forward.fighters[0].x = -700;
+        forward.fighters[1].x = 700;
+        run(&mut forward, [LIGHT, DASH | LEFT], 14);
+        assert!(forward.fighters[1].hp < 100, "dashing in is hit");
+        let mut back = duel();
+        run(&mut back, [LIGHT, DASH], 14);
+        assert_eq!(back.fighters[1].hp, 100);
+    }
+    #[test]
+    fn light_strings_continue_on_block() {
+        let mut m = duel();
+        run(&mut m, [0, BLOCK], 10);
+        run(&mut m, [LIGHT, BLOCK], 11);
+        run(&mut m, [0, BLOCK], 1);
+        run(&mut m, [LIGHT, BLOCK], 3);
+        assert_eq!(m.fighters[0].action, 11, "jab -> cross on block");
+        // Heavy enders do not cancel from a blocked jab.
+        let mut heavy = duel();
+        run(&mut heavy, [0, BLOCK], 10);
+        run(&mut heavy, [LIGHT, BLOCK], 11);
+        run(&mut heavy, [HEAVY, BLOCK], 3);
+        assert_eq!(heavy.fighters[0].action, 1);
     }
     #[test]
     fn deterministic_long_match_and_serialization() {

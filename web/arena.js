@@ -328,7 +328,7 @@ function tone(kind) {
   try {
     audio ||= new (window.AudioContext || window.webkitAudioContext)(); audio.resume();
     const osc = audio.createOscillator(), gain = audio.createGain(), time = audio.currentTime;
-    const heavy = kind === 5 || kind === 8 || state?.fighters[1 - state.event_target]?.action === 2;
+    const heavy = kind === 5 || kind === 8 || kind === 10 || state?.fighters[1 - state.event_target]?.action === 2;
     const duration = kind === 3 ? .13 : heavy ? .23 : .11;
     osc.type = kind === 3 ? 'sine' : 'triangle'; osc.frequency.setValueAtTime(kind === 3 ? 980 : kind === 2 ? 270 : heavy ? 92 : 165, time);
     osc.frequency.exponentialRampToValueAtTime(kind === 3 ? 1450 : 40, time + duration);
@@ -381,13 +381,14 @@ function accept(next, isPaused = false) {
   const special = document.querySelector('.act.special');
   special.classList.toggle('charged', mine.meter >= 500);
   special.classList.toggle('breaker', breakerReady());
+  relabel();
   const label = paused ? 'СОПЕРНИК ПЕРЕПОДКЛЮЧАЕТСЯ' : state.phase === 0 ? String(Math.max(1, Math.ceil(state.phase_ticks / 60))) : state.phase === 2 ? (state.winner < 0 ? 'НИЧЬЯ' : state.winner === side ? 'ТВОЙ РАУНД' : 'РАУНД СОПЕРНИКА') : '';
   text('announcement', label); show('announcement', !!label);
   if (state.event !== lastEvent) {
     lastEvent = state.event; eventUntil = performance.now() + 700;
-    const labels = ['', 'ПОПАДАНИЕ', 'БЛОК', 'ПАРИРОВАНИЕ', 'ЗАЩИТА СЛОМАНА', 'ЗАХВАТ', 'КОНТРАТАКА', 'НАКАЗАНИЕ', 'ВЫХОД ИЗ КОМБО'];
+    const labels = ['', 'ПОПАДАНИЕ', 'БЛОК', 'ПАРИРОВАНИЕ', 'ЗАЩИТА СЛОМАНА', 'ЗАХВАТ', 'КОНТРАТАКА', 'НАКАЗАНИЕ', 'ВЫХОД ИЗ КОМБО', 'ЗАХВАТ СОРВАН', 'БРОСОК'];
     const combo = state.fighters[1 - state.event_target].combo;
-    text('combat-event', (combo > 1 && state.event_kind !== 2 ? combo + ' × СВЯЗКА · ' : '') + labels[state.event_kind]); tone(state.event_kind);
+    text('combat-event', (combo > 1 && ![2, 9, 10].includes(state.event_kind) ? combo + ' × СВЯЗКА · ' : '') + (labels[state.event_kind] || '')); tone(state.event_kind);
     haptic(state.event_kind === 2 ? 'light' : state.event_target === side ? 'heavy' : 'medium');
   }
   if (state.phase === 3) {
@@ -400,7 +401,7 @@ function accept(next, isPaused = false) {
     $('rematch').disabled = !rematchPossible || rematchRequested;
   }
 }
-function breakerReady() { const mine = state?.fighters[side]; return !!mine && mine.stun > 0 && mine.down === 0 && mine.meter >= 1000; }
+function breakerReady() { const mine = state?.fighters[side]; return !!mine && (mine.stun > 0 || (mine.juggle > 0 && mine.y > 0)) && mine.down === 0 && mine.meter >= 1000; }
 
 function startPractice() {
   if (!module) return;
@@ -520,6 +521,20 @@ function setSource(source, mask, latch = 40) {
 function showPressed() {
   if (bits === shownBits) return; shownBits = bits;
   for (const b of document.querySelectorAll('[data-bit]')) b.classList.toggle('pressed', !!(bits & Number(b.dataset.bit)));
+  relabel();
+}
+// The pad says what a press will do now: crouching turns the attacks into
+// the low set, a grabbed fighter is told to break free, a full bar escapes.
+function relabel() {
+  const mine = state?.fighters?.[side];
+  const low = !!(bits & BIT.CROUCH) && !(mine?.y > 0);
+  for (const b of document.querySelectorAll('#pad .act')) {
+    const span = b.firstElementChild; if (!span) continue;
+    const base = b.dataset.name ||= span.textContent;
+    const next = (low && b.dataset.low) || (mine?.held > 0 && b.dataset.held) || (b.dataset.breaker && breakerReady() && b.dataset.breaker) || base;
+    if (span.textContent !== next) span.textContent = next;
+    b.classList.toggle('alt', next !== base);
+  }
 }
 function sendInput() { if (mode === 'online' && authenticated) { send({ type: 'input', seq: ++seq, bits }); lastSent = performance.now(); } }
 function clearInput() { held.clear(); latched.clear(); bits = 0; pendingEdges = 0; sendInput(); showPressed(); resetStick(); }

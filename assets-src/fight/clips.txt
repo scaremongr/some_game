@@ -9,7 +9,7 @@ jab_m      = 020 Med Head Jab.glb
 jab_l      = 021 Long Head Jab.glb
 cross      = 025 Cross Punch.glb
 heavy      = 057 Mma Spinning Back Kick.glb
-uppercut   = 040 Boxing Back Hand Uppercut.glb
+uppercut   = 041 Standing Left Uppercut Punch.glb
 kick       = 061 Male Front Snap Kick With The Lead Foot.glb
 sweep      = 068 360 Leg Sweep Kick.glb
 roundhouse = 053 Mma High Kick.glb
@@ -44,3 +44,7 @@ crouch = 138 Crouch Idle.glb
 crouch_walk_fwd = 140 Walking Forward While Crouched.glb
 crouch_walk_back = 141 Walking Backwards While Crouched.glb
 smash = 146 Hard Floor Stomp.glb
+# Block: guard held with the forearms up; blocked hits play the recoil.
+block = 085 High Center Block.glb
+# Quick low kick from a crouch.
+low_kick = 054 Mma Low Kick.glb

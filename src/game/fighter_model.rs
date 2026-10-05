@@ -26,6 +26,10 @@ const GRAVITY: f32 = 5.0 * 60.0 * 60.0 / 1000.0;
 const DOWN_FALL: f32 = 22.0;
 /// Frame of a knockdown at which a captured fall hits the floor.
 const DOWN_LAND: f32 = 18.0;
+/// The block take: forearms up in front of the face (held while guarding)
+/// and the deepest point of the recoil when a blow lands on the guard.
+const BLOCK_HOLD: f32 = 0.27;
+const BLOCK_PEAK: f32 = 0.47;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Clip {
@@ -231,6 +235,10 @@ struct Side {
     jump_dir: f32,
     /// Launched by a throw: the flight and landing use the thrown clips.
     thrown: bool,
+    /// Blockstun of the last blocked blow and render ticks since it landed:
+    /// the guard recoil runs on its own clock, smooth between snapshots.
+    block_total: f32,
+    block_clock: f32,
 }
 impl Side {
     fn new() -> Side {
@@ -259,6 +267,8 @@ impl Side {
             recoil: Recoil::default(),
             jump_dir: 0.0,
             thrown: false,
+            block_total: 0.0,
+            block_clock: f32::MAX,
         }
     }
 }
@@ -655,7 +665,7 @@ impl FighterModel {
         let pick = |keys: &[&'static str]| keys.iter().copied().find(|k| has(k));
         match clip {
             Clip::Idle => pick(&["idle"]),
-            Clip::Guard => pick(&["guard"]),
+            Clip::Guard => pick(&["block", "guard"]),
             Clip::Crouch | Clip::CrouchGuard => pick(&["crouch"]),
             Clip::Attack(1) => {
                 if distance < 0.95 {
@@ -676,6 +686,7 @@ impl FighterModel {
             Clip::Attack(14) => pick(&["special"]),
             Clip::Attack(13) => pick(&["air_kick"]),
             Clip::Attack(19) => pick(&["smash"]),
+            Clip::Attack(16) => pick(&["low_kick", "kick"]),
             Clip::Air if jump_dir > 0.0 => pick(&["jump_fwd", "jump"]),
             Clip::Air if jump_dir < 0.0 => pick(&["jump_back", "jump"]),
             Clip::Air => pick(&["jump"]),
@@ -807,8 +818,24 @@ impl FighterModel {
             }
             if f.blockstun > s.blockstun {
                 s.secondary.kick(&mut s.recoil, vec3(0.0, -0.2, -0.7), -2.8, -2.0);
+                s.block_total = f.blockstun as f32;
+                s.block_clock = 0.0;
             }
             s.blockstun = f.blockstun;
+            s.block_clock += dt * 60.0;
+            // Guard pose on the block take: the held guard breathes a little;
+            // a blocked blow rocks it back and returns, deeper for heavier
+            // blows (longer blockstun).
+            let block_time = {
+                let recoil = if view.preview {
+                    if f.blockstun > 0 { 1.0 - f.blockstun as f32 / 16.0 } else { 1.0 }
+                } else {
+                    (s.block_clock / s.block_total.max(1.0)).min(1.0)
+                };
+                let depth = (s.block_total / 20.0).clamp(0.4, 1.0);
+                let breathe = if view.preview { 0.0 } else { (view.time * 2.3 + side as f32).sin() * 0.02 };
+                BLOCK_HOLD + breathe * (1.0 - recoil) + (BLOCK_PEAK - BLOCK_HOLD) * depth * (recoil * std::f32::consts::PI).sin()
+            };
             if started && !view.preview {
                 match clip {
                     Clip::React(kind) => {
@@ -1107,6 +1134,7 @@ impl FighterModel {
                         }
                         Clip::Knockout => (take.marks.start + clip_frames / 60.0, Travel::Keep),
                         Clip::Victory | Clip::Defeat => (clip_frames / 60.0, Travel::InPlace),
+                        Clip::Guard if key == "block" => (block_time, Travel::InPlace),
                         _ => ((view.time + side as f32 * 0.4).rem_euclid(take.duration.max(0.1)), Travel::InPlace),
                     };
                     let t = t.clamp(0.0, take.duration);
@@ -1145,6 +1173,25 @@ impl FighterModel {
                     Travel::Air(w) => vec3(-hips_now.x, (take.stand_y - hips_now.y) * w, -hips_now.z),
                     _ => vec3(-take.start_hips.x, 0.0, -take.start_hips.z) - moved_in * (1.0 - keep),
                 };
+                // A take that does not carry the body far enough (the rising
+                // uppercut is captured on the spot) steps in for the rest:
+                // closed before the contact, given back in the recovery.
+                if let (Clip::Attack(action), Travel::Return) = (clip, travel) {
+                    if let Some(m) = moves::attack(action).filter(|_| action != 4 && action != 19) {
+                        let depth = if m.height == moves::Height::Low { 0.30 } else { 0.16 };
+                        let wanted = (bodies[1 - side].x - x).abs() - depth - take.reach;
+                        let short = (wanted - take.lunge.max(0.0) * 1.1).clamp(0.0, 0.45);
+                        let (hit, active, end) = (m.startup as f32, (m.startup + m.active) as f32, m.total as f32);
+                        let smooth = |u: f32| {
+                            let u = u.clamp(0.0, 1.0);
+                            u * u * (3.0 - 2.0 * u)
+                        };
+                        let from = (hit - 8.0).max(0.0);
+                        let into = smooth((frame - from) / (hit - 1.0 - from).max(1.0));
+                        let back = smooth((frame - active - 2.0) / (end - active - 6.0).max(1.0));
+                        shift.z += short * into * (1.0 - back);
+                    }
+                }
                 if view.freeze > 0 && view.victim == side && matches!(clip, Clip::React(_) | Clip::AirHit) {
                     shift.z += (view.time * 95.0).sin() * 0.022;
                 }
@@ -1189,9 +1236,18 @@ impl FighterModel {
                 // chest, arms and head from the stance or guard, so the fists
                 // stay up the way a fighter crouches.
                 if crouched {
-                    let top = if clip == Clip::CrouchGuard { "guard" } else { "idle" };
+                    let block = clip == Clip::CrouchGuard && captured.takes.contains_key("block");
+                    let top = match (clip, block) {
+                        (_, true) => "block",
+                        (Clip::CrouchGuard, false) => "guard",
+                        _ => "idle",
+                    };
                     if let Some(top) = captured.takes.get(top) {
-                        let tt = (view.time + side as f32 * 0.4).rem_euclid(top.duration.max(0.1));
+                        let tt = if block {
+                            block_time
+                        } else {
+                            (view.time + side as f32 * 0.4).rem_euclid(top.duration.max(0.1))
+                        };
                         self.scratch.locals.clear();
                         self.scratch.locals.extend(av.character.skeleton.bones.iter().map(|b| b.bind_local));
                         captured.lib.sample(top.clip, tt, Vec3::ZERO, &mut self.scratch);
@@ -1290,13 +1346,16 @@ impl FighterModel {
     }
 }
 
-/// The attack a strike take stands in for.
 /// The limb that lands `action` for this body: as authored, except the
-/// captured heavy attack, which is a spinning back kick (rear foot).
+/// captured heavy attack (a spinning back kick, rear foot) and the captured
+/// uppercut (lead hand).
 fn striker_of(av: &Avatar, action: u32) -> usize {
-    let captured_heavy = av.captured.as_ref().is_some_and(|c| c.takes.contains_key("heavy"));
-    if action == 2 && captured_heavy {
+    let captured = |key: &str| av.captured.as_ref().is_some_and(|c| c.takes.contains_key(key));
+    if action == 2 && captured("heavy") {
         3
+    } else if action == 10 && captured("uppercut") {
+        // The captured uppercut rises with the lead hand.
+        0
     } else {
         anims::striker(action)
     }
@@ -1314,6 +1373,7 @@ fn lean(character: &Character, pose: &mut Pose, globals: &mut Vec<Mat4>, bone: u
     pose.locals[bone].rotation = (local * pose.locals[bone].rotation).normalize();
 }
 
+/// The attack a strike take stands in for.
 fn take_action(key: &str) -> Option<u32> {
     Some(match key.split('_').next()? {
         "jab" => 1,
@@ -1327,6 +1387,7 @@ fn take_action(key: &str) -> Option<u32> {
         "special" => 14,
         "air" => 13,
         "smash" => 19,
+        "low" => 16,
         _ => return None,
     })
 }

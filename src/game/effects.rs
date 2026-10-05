@@ -7,6 +7,8 @@ enum Kind {
     Spark,
     Dust,
     Ring,
+    /// A bracket-shaped barrier in front of a blocking fighter.
+    Shield,
 }
 
 struct Particle {
@@ -101,6 +103,20 @@ impl Effects {
         });
     }
 
+    /// Guard flash: a curved barrier at `at`, bulging toward `dir` (+1 = +x),
+    /// that widens and fades in a fraction of a second.
+    pub fn shield(&mut self, at: Vec3, dir: f32, radius: f32, color: Color) {
+        self.list.push(Particle {
+            kind: Kind::Shield,
+            pos: at,
+            vel: vec3(dir, 0.0, 0.0),
+            life: 0.26,
+            max: 0.26,
+            size: radius,
+            color,
+        });
+    }
+
     pub fn update(&mut self, dt: f32) {
         for p in &mut self.list {
             p.life -= dt;
@@ -114,6 +130,8 @@ impl Effects {
                     p.size += dt * 0.22;
                 }
                 Kind::Ring => {}
+                // The velocity only stores the facing of the barrier.
+                Kind::Shield => continue,
             }
             p.pos += p.vel * dt;
             if p.pos.y < 0.01 {
@@ -149,6 +167,23 @@ impl Effects {
                         let pa = camera.project(p.pos + vec3(a0.cos(), 0.0, a0.sin() * 0.6) * radius, canvas);
                         let pb = camera.project(p.pos + vec3(a1.cos(), 0.0, a1.sin() * 0.6) * radius, canvas);
                         g.line(pa, pb, 2.5 * k + 0.5, p.color.with_alpha(k));
+                    }
+                }
+                Kind::Shield => {
+                    let grow = 0.75 + 0.25 * (1.0 - k);
+                    let segments = 16;
+                    for (layer, (scale, width)) in [(1.0, 4.0), (0.78, 2.0)].into_iter().enumerate() {
+                        let r = p.size * grow * scale;
+                        let point = |a: f32| {
+                            let bulge = a.cos();
+                            camera.project(p.pos + vec3(p.vel.x * r * 0.32 * bulge, r * a.sin(), r * 0.55 * bulge), canvas)
+                        };
+                        let alpha = k.powf(0.6) * if layer == 0 { 0.95 } else { 0.6 };
+                        for j in 0..segments {
+                            let a0 = -1.3 + 2.6 * j as f32 / segments as f32;
+                            let a1 = -1.3 + 2.6 * (j + 1) as f32 / segments as f32;
+                            g.line(point(a0), point(a1), width * (0.4 + k), p.color.with_alpha(alpha));
+                        }
                     }
                 }
             }

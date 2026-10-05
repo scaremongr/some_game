@@ -102,6 +102,8 @@ pub struct FightScene {
     impact: Vec3,
     impact_kind: u32,
     hit_flash: [f32; 2],
+    /// Cyan rim on a fighter whose guard just took a blow.
+    guard_flash: [f32; 2],
     shake: f32,
     punch: f32,
     view_distance: f32,
@@ -162,6 +164,7 @@ impl FightScene {
             impact: Vec3::ZERO,
             impact_kind: 0,
             hit_flash: [0.0; 2],
+            guard_flash: [0.0; 2],
             shake: 0.0,
             punch: 0.0,
             view_distance: 6.0,
@@ -249,14 +252,26 @@ impl FightScene {
             3 => self.reaction[1 - target] = Reaction::Parried,
             4 => self.reaction[target] = Reaction::GuardBreak,
             8 => self.reaction[1 - target] = Reaction::Pushed,
+            // A broken throw: both stagger apart.
+            9 => self.reaction = [Reaction::Pushed; 2],
             2 => {}
+            // The throw's slam: the body is already on the floor.
+            10 => {
+                if !preview {
+                    self.shake = self.shake.max(0.8);
+                    self.punch = 0.7;
+                    self.hit_flash[target] = 1.0;
+                }
+                return;
+            }
             _ => self.reaction[target] = Reaction::from_attack(e.attacker_action),
         }
         let victim = &self.fighters[target];
         let heavy = moves::attack(e.attacker_action).is_some_and(|m| m.damage >= 15);
+        let low = moves::attack(e.attacker_action).is_some_and(|m| m.height == moves::Height::Low);
         let fallback = vec3(
             self.bodies[target].x + victim.facing as f32 * 0.18,
-            self.bodies[target].y + if e.attacker_action == 9 { 0.3 } else { 1.3 },
+            self.bodies[target].y + if low { 0.3 } else { 1.3 },
             0.22,
         );
         self.impact = match &self.model {
@@ -275,9 +290,21 @@ impl FightScene {
         let dir = -victim.facing.signum() as f32;
         match e.kind {
             2 => {
-                self.effects.sparks(self.impact, dir, 9, 4.0, Color::hex(0xBFEFFF));
-                self.hit_flash[target] = self.hit_flash[target].max(0.35);
-                self.shake = self.shake.max(0.18);
+                // The guard holds: a barrier flashes in front of the defender
+                // at the height of the blow, sparks glance off it.
+                let facing = victim.facing.signum() as f32;
+                let at = vec3(self.bodies[target].x + facing * 0.34, self.impact.y.clamp(0.35, 1.6), 0.18);
+                self.effects.shield(at, facing, if heavy { 0.55 } else { 0.42 }, Color::hex(0x8FEFFF));
+                self.effects.sparks(at, dir, if heavy { 16 } else { 10 }, 4.5, Color::hex(0xCFF6FF));
+                self.guard_flash[target] = 1.0;
+                self.shake = self.shake.max(if heavy { 0.3 } else { 0.18 });
+            }
+            9 => {
+                let mid = (self.bodies[0].x + self.bodies[1].x) * 0.5;
+                self.effects.sparks(vec3(mid, 1.25, 0.2), 0.0, 18, 5.0, Color::hex(0xFFFFFF));
+                self.effects.ring(vec3(mid, 0.03, 0.0), 1.2, Color::hex(0xDDF8FF));
+                self.hit_flash = [0.7; 2];
+                self.shake = self.shake.max(0.3);
             }
             3 => {
                 self.effects.sparks(self.impact, dir, 16, 5.5, Color::hex(0x7EEDFF));
@@ -432,6 +459,10 @@ impl FightScene {
         let fade = (-dt * 7.0).exp();
         for f in &mut self.hit_flash {
             *f *= fade;
+        }
+        let guard_fade = (-dt * 5.0).exp();
+        for f in &mut self.guard_flash {
+            *f *= guard_fade;
         }
         self.flash = (self.flash - dt * 3.5).max(0.0);
         self.shake *= (-dt * 8.0).exp();
@@ -799,15 +830,26 @@ impl Scene for FightScene {
                     b: lighting.key_color.b + (east.b - lighting.key_color.b) * cool,
                     a: 1.0,
                 };
+                // A raised guard reads at a glance: a steady cyan rim, flaring
+                // when a blow lands on it.
+                let guarding = self.fighters[i].guard && self.fighters[i].hp > 0;
+                let shield = (if guarding { 0.55 } else { 0.0 } + self.guard_flash[i]).min(1.0) * (1.0 - flash);
+                let cyan = Color::hex(0x8FEFFF);
+                let rim = Color {
+                    r: team.r + (white.r - team.r) * flash,
+                    g: team.g + (white.g - team.g) * flash,
+                    b: team.b + (white.b - team.b) * flash,
+                    a: 1.0,
+                };
                 let team_light = Lighting {
                     key_color,
                     rim_color: Color {
-                        r: team.r + (white.r - team.r) * flash,
-                        g: team.g + (white.g - team.g) * flash,
-                        b: team.b + (white.b - team.b) * flash,
+                        r: rim.r + (cyan.r - rim.r) * shield,
+                        g: rim.g + (cyan.g - rim.g) * shield,
+                        b: rim.b + (cyan.b - rim.b) * shield,
                         a: 1.0,
                     },
-                    rim_strength: 0.38 + flash * 1.5,
+                    rim_strength: 0.38 + flash * 1.5 + shield * 0.9,
                     ..lighting
                 };
                 g.draw_skinned(

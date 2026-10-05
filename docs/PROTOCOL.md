@@ -70,13 +70,15 @@ live in `DATA_DIR` (`/app/data`, a host volume in production).
 `phase`: 0 countdown, 1 fight, 2 round result, 3 final result.
 `winner`: -1 tie/undecided, 0 left, 1 right. `remaining` and `phase_ticks` are
 60 Hz simulation ticks. `event` is monotonic within a match; `event_kind`:
-1 hit, 2 block, 3 parry, 4 guard break, 5 grab, 6 counter, 7 punish, 8 breaker.
+1 hit, 2 block, 3 parry, 4 guard break, 5 grab, 6 counter, 7 punish, 8 breaker,
+9 throw broken (tech or two grabs at once), 10 throw slam (the throw's damage).
 
 The server runs the same isolated Rust/WASM module as browser training at 60 Hz.
 It accepts inputs only; position, HP, stamina, damage, time and wins sent by
 clients have no authority. Hits resolve from both pre-hit states, allowing trades.
 A 12-tick input buffer captures presses during hitstop. Early attack cancels
-require a confirmed hit and an allowed transition in `combat/src/moves.rs`.
+require a confirmed hit and an allowed transition in `combat/src/moves.rs`
+(`cancel`); light strings may also continue after a block (`block_cancel`).
 Rendering smooths positions toward authoritative snapshots. There is currently
 **no rollback, client combat prediction or lag compensation**: high RTT delays
 attacks. The HUD flags RTT above 180 ms; a geographically close server matters.
@@ -87,22 +89,36 @@ Frame data (startup, active, recovery, reach, height, damage, stun, costs) lives
 in `combat/src/moves.rs` and also drives animation timing. Action IDs:
 0 idle, 1 jab, 2 overhead, 3 dash, 4 throw, 5 hitstun, 8 kick, 9 sweep,
 10 uppercut, 11 cross, 12 roundhouse, 13 air kick, 14 special, 15 knockdown,
-19 room smash. IDs 6, 7, 16, 17, 18 are presentation-only clips.
+16 low kick (crouch + jab), 19 room smash. IDs 6, 7, 17, 18 are unused.
 
 Fighters add `crouch`, `meter` (0..1000), `blockstun`, `down`, `invulnerable`,
 `juggle`, `combo_damage`, `confirmed`, `prop_hit`, `air_attack`, `held` (ticks
 left in a thrower's grip: the victim is pinned 600 mm in front of the thrower,
-then knocked down). Between rounds and after the match airborne fighters still
-fall and slide to rest; nothing else moves. High jabs miss
-unprotected crouching opponents; lows beat standing guard; overheads beat low
-guard; jumps evade lows. Throws cannot grab airborne or already stunned victims.
-Blocking locks recovery for the move's blockstun. Counter hits reward interrupting
-startup; punish events identify hits during attack recovery.
+then slammed and knocked down) and `parry_cooldown` (ticks until a re-raised
+guard gets its parry window again). Between rounds and after the match airborne
+fighters still fall and slide to rest; nothing else moves. High jabs miss
+unprotected crouching opponents; lows (low kick, sweep) beat standing guard;
+overheads beat low guard; jumps evade lows. Throws cannot grab airborne,
+stunned or blocking (blockstun) victims. Blocking locks recovery for the move's
+blockstun and costs stamina (10 × damage); an empty bar breaks the guard. A guard
+raised less than 6 ticks before the blow parries, unless it was lowered within
+the last 18 ticks. Counter hits (interrupting startup) add 3 damage and 6 ticks
+of hitstun; punish events identify hits during attack recovery. Only the back
+dash slips through attacks (frames 2–8). The rising uppercut is out of reach of
+high and air attacks while it rises.
 
-J-J-U chains jab/cross/roundhouse. U-K and crouch-K launch with an uppercut.
-Combo damage scales only while the victim cannot recover. Four air hits force
-landing; knockdown lasts 36 ticks and wakeup grants 12 ticks of protection.
-Special costs 500 meter. Block+dash during hitstun spends a full bar to escape.
+J-J-U chains jab/cross/roundhouse; crouch-J then crouch-K or crouch-U continues
+a low kick into the uppercut or the sweep. U-K and crouch-K launch with an
+uppercut. On block J-J, J-U, J(cross)-U and low-J continue. Combo damage scales
+only while the victim cannot recover; a fighter hit in the air has no control
+until landing (a full meter still escapes). Four air hits force landing;
+knockdown lasts 56 ticks (42 after a throw's slam) and wakeup grants 12 ticks of
+protection that ends when the fighter acts. A grabbed victim breaks the throw by
+pressing grab within 10 ticks of the grab (event 9; both stagger apart, no
+damage); otherwise the throw's damage lands with the slam (event 10). Special
+costs 500 meter. Block+dash during hitstun spends a full bar to escape.
+Measured advantage on block: jab −1, low kick −3, cross/kick −4, special −1;
+overhead and roundhouse −11, sweep −16, uppercut −21 (`combat` tests).
 
 Each fighter includes integer `vx`, `y`, `vy`, `recoil`, `recoil_v` and
 `wall_cooldown`. Velocities use millimetres per tick; all competitive physics
@@ -147,7 +163,8 @@ requires sticky connections plus shared matchmaking/session storage.
 Per connection: 12 KiB messages, 100 messages/second, 256 KiB output backpressure
 limit, 5-second ping heartbeat. Server caps concurrent sockets/sessions at 200.
 These are resource bounds, not a measured concurrency guarantee. Use a reverse
-proxy for public traffic. No ratings or persistent match history yet.
+proxy for public traffic. Ratings persist in `DATA_DIR`; there is no match
+history or replay storage yet.
 
 Telegram integration follows the official [initData validation](https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app)
 and [Mini App direct links](https://core.telegram.org/bots/webapps#direct-link-mini-apps).

@@ -105,14 +105,19 @@ Principles:
   clips retargeted onto that fighter's skeleton. Keys (in
   `assets-src/fight/clips.txt`, `key = file.glb [@ from-to]`): `idle, guard,
   walk_fwd/back, crouch, crouch_walk_fwd/back, jab_s/m/l, cross, heavy (spinning
-  back kick), uppercut, kick, sweep, roundhouse, special, throw, held (victim in
-  a grip), air_kick, smash, jump/jump_fwd/jump_back, dash_fwd/back, hit_head,
-  hit_gut, stagger, dizzy, hit_wall, air_hit, air_down, thrown, thrown_down,
-  swept, getup, ko, victory, defeat`. Missing keys fall back to authored poses.
+  back kick), uppercut (rising lead hand), kick, low_kick, sweep, roundhouse,
+  special, throw, held (victim in a grip), air_kick, smash, jump/jump_fwd/
+  jump_back, dash_fwd/back, block (guard held on one frame, blocked blows play
+  its recoil; the crouching guard takes its upper body), hit_head, hit_gut,
+  stagger, dizzy, hit_wall, air_hit, air_down, thrown, thrown_down, swept,
+  getup, ko, victory, defeat`. Missing keys fall back to authored poses.
 - Marks: strikes by the striking limb's reach (`strike_marks`, `Marks::fit`,
   max speed-up 2.5×); falls by hips height; jumps by feet contact; throw by
-  first two-hand reach. Knockdown lasts `KNOCKDOWN = 72` ticks, a grip
-  `HOLD = 32`.
+  first two-hand reach. Knockdown lasts `KNOCKDOWN = 56` ticks, a grip
+  `HOLD = 32`. A strike take that does not carry the body to the opponent (the
+  uppercut is captured on the spot) gets a synthetic step-in before contact.
+- Guard readability: the block take pose, a cyan rim on a guarding fighter and
+  a barrier flash (`Effects::shield`) where a blow meets the guard.
 - Baked room: `tools/room/apartment.py` authors five open furnished rooms;
   `build_room.py` supplies Blender import/material/preview helpers. CC0 Poly Haven
   assets and seamless architectural surfaces, with 22 additional model types.
@@ -131,10 +136,19 @@ Principles:
   start in living room, kitchen, study, garden, bedroom (then repeat).
 - Actions: 0 idle, 1 jab, 2 heavy (overhead), 3 dash, 4 throw, 5 hitstun,
   8 kick, 9 sweep, 10 uppercut, 11 cross, 12 roundhouse, 13 air kick,
-  14 special, 15 knockdown, 19 room smash.
+  14 special, 15 knockdown, 16 low kick, 19 room smash. Crouch + J/U/K =
+  low kick / sweep / uppercut (`select_action`).
+- Defence rules (2026-10-05 iteration, see COMBAT_RESEARCH.md §18): parry only
+  for a fresh guard (`PARRY`, `PARRY_COOLDOWN`); light strings continue on
+  block (`moves::block_cancel`); no throws on a blocking victim; throw tech
+  (`moves::TECH`, event 9); a juggled body has no control until landing; the
+  wake-up protection ends when the fighter acts; only the back dash evades; the
+  rising uppercut beats high and air attacks. Block advantage is asserted by
+  the test `block_advantage_matches_the_design` — retune numbers there.
 - Throw: grab reach 1150 mm, victim gets `held = HOLD` ticks pinned 600 mm in
-  front of the thrower, then knocked down. Between rounds and after the match
-  airborne fighters `settle()` (land) — nothing else moves.
+  front of the thrower, then is slammed (damage and event 10 on the slam) and
+  knocked down for `KNOCKDOWN - THROWN_EARLY`. Between rounds and after the
+  match airborne fighters `settle()` (land) — nothing else moves.
 - Serialization: `Match` is nanoserde JSON; new fields must be
   `#[nserde(default)]` to keep old snapshots parseable.
 - Changing frame data changes gameplay for everyone: keep the authored
@@ -224,7 +238,7 @@ python tools/fetch-assets.py                 # models + packs (not in git)
 .\build-web.ps1                              # -> dist/ (both wasm + web + assets)
 .\build-web.ps1 -Serve                       # + local dev server on :8080 (guest identities)
 cargo test --offline --lib                   # engine/game: 60 tests
-cargo test --offline --manifest-path combat/Cargo.toml   # combat: 25 tests
+cargo test --offline --manifest-path combat/Cargo.toml   # combat: 34 tests
 npm test                                     # server: 15 tests (node:test)
 npm run test:browser; npm run test:combat; npm run test:physics   # Playwright, need dist/
 ```
@@ -236,7 +250,7 @@ Visual review tools (after `build-web.ps1`):
   states; spec: `{shots:[{label, f0:{…fighter fields}, f1, x:[mmL,mmR],
   camera:[eye xyz, target xyz, fov, 1, clipIndex?, time?], state:{…}}],
   fighters:[{model,pack},…]}`.
-- `node scripts/fight-video.mjs outDir moves|air|ground|spar|ko` (env
+- `node scripts/fight-video.mjs outDir moves|air|ground|defense|spar|ko` (env
   `FIGHTER=<id>`) records a scripted bout; ffmpeg lives in
   `.browsers/ffmpeg-*/`; `scripts/tile-frames.mjs` tiles frames.
 
