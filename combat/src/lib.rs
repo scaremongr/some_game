@@ -22,9 +22,12 @@ pub const EDGE_MASK: u32 = LIGHT | HEAVY | DASH | THROW | KICK | JUMP | SPECIAL 
 pub const KNOCKDOWN: u32 = 56;
 /// A guard raised this many ticks before the blow parries it.
 pub const PARRY: u32 = 6;
-/// Walking speed (mm/tick): 1.56 m/s forward, 1.32 m/s back.
-pub const WALK_FORWARD: i32 = 26;
-pub const WALK_BACK: i32 = 22;
+/// Walking speed (mm/tick): 0.9 m/s forward, 0.72 m/s back, 0.54 m/s
+/// guarded or crouched — a brisk version of the captured fight-stance walk
+/// (it plays by distance, so the feet stay planted); the dash covers ground.
+pub const WALK_FORWARD: i32 = 15;
+pub const WALK_BACK: i32 = 12;
+pub const WALK_SLOW: i32 = 9;
 /// After lowering the guard, raising it again within this many ticks blocks
 /// without the parry window: tapping the button is not a free parry.
 pub const PARRY_COOLDOWN: u32 = 18;
@@ -549,7 +552,7 @@ impl Match {
                     // crouched slowly; the dash covers distance.
                     f.x += movement
                         * if f.guard || f.crouch {
-                            12
+                            WALK_SLOW
                         } else if movement == f.facing {
                             WALK_FORWARD
                         } else {
@@ -1115,7 +1118,7 @@ mod tests {
     #[test]
     fn every_room_is_reachable_without_breaking_anything() {
         let mut m = duel();
-        run(&mut m, [LEFT, RIGHT], 600);
+        run(&mut m, [LEFT, RIGHT], 1300);
         assert_eq!(m.fighters[0].x, -ARENA_LIMIT);
         assert_eq!(m.fighters[1].x, ARENA_LIMIT);
         assert!(m.objects.iter().zip(room::LAYOUT).all(|(o, d)| o.hp == d.hp));
@@ -1132,7 +1135,7 @@ mod tests {
     #[test]
     fn running_into_wall_cannot_break_it_without_hit_impulse() {
         let mut m = duel();
-        run(&mut m, [LEFT, RIGHT], 600);
+        run(&mut m, [LEFT, RIGHT], 1300);
         assert_eq!(m.walls[0].hp, 110);
         assert_eq!(m.walls[1].hp, 110);
     }
@@ -1273,9 +1276,9 @@ mod tests {
     #[test]
     fn walls_and_no_crossing() {
         let mut m = duel();
-        run(&mut m, [RIGHT, LEFT], 500);
+        run(&mut m, [RIGHT, LEFT], 1000);
         assert!(m.fighters[1].x - m.fighters[0].x >= 600);
-        run(&mut m, [LEFT, RIGHT], 600);
+        run(&mut m, [LEFT, RIGHT], 1300);
         assert_eq!(m.fighters[0].x, -ARENA_LIMIT);
         assert_eq!(m.fighters[1].x, ARENA_LIMIT);
     }

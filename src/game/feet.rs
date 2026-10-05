@@ -1,10 +1,11 @@
-//! Planted feet. While a fighter stands, guards, crouches or walks, each
-//! foot stays where it was put on the floor; when the body has moved too far
-//! from it, the foot takes a quick arcing step to where it belongs (a little
-//! ahead when moving), one foot at a time, the leading one first. The legs
-//! reach their feet with two-bone IK, the feet keep the animated angle. No
-//! foot slides, whatever the walking speed. Cosmetic: the simulation owns
-//! the body's position.
+//! Planted feet while a fighter stands still (stance, guard, crouch): each
+//! foot stays where it was put on the floor — where a walk or a strike left
+//! it — and when the body has moved away from it (pushed back by a blocked
+//! blow, settling after a walk) the foot takes a short arcing step to where
+//! the stance wants it, one foot at a time. The legs reach their feet with
+//! two-bone IK, the feet keep the animated angle. Walking itself is the
+//! captured cycle played by distance (fighter_model.rs). Cosmetic: the
+//! simulation owns the body's position.
 use super::ragdoll::turn_bone;
 use crate::engine::{math3::*, skeleton::{Pose, Skeleton}};
 

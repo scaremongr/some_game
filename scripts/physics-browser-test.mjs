@@ -17,7 +17,7 @@ try{
   await p.waitForFunction(()=>JSON.parse(new TextDecoder().decode(window.arenaRenderBytes)).phase===1);
   // Cross both former west barriers with ordinary walking and untouched props.
   await p.keyboard.down('a');
-  await p.waitForFunction(()=>JSON.parse(new TextDecoder().decode(window.arenaRenderBytes)).fighters[0].x < -9000, {}, {timeout:10000});
+  await p.waitForFunction(()=>JSON.parse(new TextDecoder().decode(window.arenaRenderBytes)).fighters[0].x < -9000, {}, {timeout:20000});
   await p.keyboard.up('a');
   const garden = await state();
   assert.ok(garden.objects.every(o=>o.broken_tick===0));

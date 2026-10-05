@@ -53,7 +53,7 @@ Principles:
 | `src/game/mocap.rs` | Fight pack format `PFP1` (body bones, i16 quats, 30 fps), sampling, `Marks`/`strike_marks`, `strike_limb`. |
 | `src/game/anims.rs`, `body.rs` | Authored key-pose animation + IK body solver: the fallback when a pack lacks a take. |
 | `src/game/ragdoll.rs` | Physical layer over the animated pose: 18 joint particles (hips pinned to the animation, the rest damped springs around it), blows push the struck part, root acceleration is felt as inertia, loose parts sag, bone lengths and the floor are kept; bones are turned to follow. `Drive` per state: full control normally, loose limbs in flight and knockdowns, limp after a KO. Cosmetic. |
-| `src/game/feet.rs` | Planted feet: while standing, guarding, crouching or walking each foot stays where it was put; when the body has moved on, it takes a short arcing step (one foot at a time, the leading one first) to where it belongs; two-bone IK with the animated knee plane, the hips sink so both legs reach. No foot slides. Cosmetic. |
+| `src/game/feet.rs` | Planted feet while standing still: each foot stays where a walk or strike left it; when the body has moved away (pushback, settling after a walk) it takes a short arcing step to where the stance wants it; two-bone IK with the animated knee plane, the hips sink so both legs reach. Cosmetic. |
 | `src/game/arena_props.rs` | The room: baked apartment from `assets/room.glb` (pieces `oNN_kkk` belong to combat room object NN; `glassNN_kkk` panes; `s_*` fixed) or a box-room fallback; deterministic debris from snapshot ticks. |
 | `src/game/timeline.rs`, `effects.rs`, `camera.rs` | Interpolation of snapshots, particles/sparks, camera. |
 | `src/game/scenery.rs` | Pictures from the page in the room: the night city behind the windows (two layers at different depths → parallax; a dark mask continues the back wall so the city shows only in the openings) and the photos on the TV, the laptop (follows the broken desk piece) and the two bedroom canvases. Screen rectangles were measured in Blender on the built room. |
@@ -150,9 +150,16 @@ Principles:
   block: the forearms, a parry: the attacker's arms). Off in preview mode.
   Inertia comes from the authoritative velocity (`f.vx`, `f.vy`, filtered
   40 ms), never from rendered positions, so uneven frames do not shake it.
-- Walking: the captured walk cycles are no longer blended in (they slid at
-  any speed but their own); `feet.rs` steps instead. Walk speed 26 mm/tick
-  forward, 22 back, 12 guarded or crouched (`combat` `WALK_FORWARD/BACK`).
+- Walking: a captured fight-stance walk cycle (`walk_fwd`, Boxing Advancing
+  Forward; `walk_back` is the same cycle played backwards; crouch walks for
+  crouching) plays **by distance**: at load each walk take gets a table of the
+  ground covered per frame (hips advance minus the drift of the standing foot,
+  so root-motion and in-place cycles both work) and the rendered distance
+  walked picks the clip time. The standing foot stays planted (test
+  `captured_walks_keep_the_standing_foot_planted`, < 2 mm/frame). Walk speed
+  15 mm/tick forward, 12 back, 9 guarded or crouched (`WALK_FORWARD/BACK/SLOW`
+  in `combat`), near the clip's natural pace. A guarded walk keeps the block
+  arms; `feet.rs` plants the feet once the walk stops.
 - Baked room: `tools/room/apartment.py` authors five open furnished rooms;
   `build_room.py` supplies Blender import/material/preview helpers. CC0 Poly Haven
   assets and seamless architectural surfaces, with 22 additional model types.
@@ -305,6 +312,10 @@ Visual review tools (after `build-web.ps1`):
   states; spec: `{shots:[{label, f0:{…fighter fields}, f1, x:[mmL,mmR],
   camera:[eye xyz, target xyz, fov, 1, clipIndex?, time?], state:{…}}],
   fighters:[{model,pack},…]}`.
+- `node scripts/frame-strip.mjs outDir "d:1500,_:400,s+a:1000"` — training
+  driven frame by frame on a manual clock (performance.now, Date.now and
+  requestAnimationFrame are replaced), every 4th frame saved: true 60 Hz
+  motion however slowly headless WebGL renders. Use it to judge animation.
 - `node scripts/fight-video.mjs outDir moves|air|ground|defense|spar|ko` (env
   `FIGHTER=<id>`) records a scripted bout; ffmpeg lives in
   `.browsers/ffmpeg-*/`; `scripts/tile-frames.mjs` tiles frames.

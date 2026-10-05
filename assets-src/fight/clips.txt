@@ -2,8 +2,10 @@
 #   cargo run --release --bin fightpack -- assets-src/fight/glb assets-src/fight/clips.txt assets/fight.pack
 # Keys are fixed in src/game/fighter_model.rs (take_for); missing keys fall back to authored poses.
 idle       = 001 Boxing Idle.glb
-walk_fwd   = 008 Short Boxing Step Forward.glb
-walk_back  = 011 Short Boxing Step Backward.glb
+# Walks play by distance (fighter_model.rs), so the standing foot stays
+# planted: a fight-stance walk cycle, reversed for walking back.
+walk_fwd   = 014 Boxing Advancing Forward.glb
+walk_back  = 014 Boxing Advancing Forward.glb
 jab_s      = 019 Short Head Jab.glb
 jab_m      = 020 Med Head Jab.glb
 jab_l      = 021 Long Head Jab.glb

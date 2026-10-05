@@ -75,7 +75,9 @@ for (const rtt of [60, 200]) {
       assert.ok(confirmed > predicted + rtt * 0.7, `server after ${confirmed} ms`);
       // Walk in and trade blows; then both stop and must agree with the server.
       const toward = a.side === 0 ? RIGHT : LEFT;
-      a.held = toward; b.held = 0; await delay(800); a.held = 0;
+      a.held = toward; b.held = 0;
+      while (Math.abs(a.last.fighters[0].x - a.last.fighters[1].x) > 1000) await delay(20);
+      a.held = 0;
       const before = stats.corrections, snaps = stats.snapshots;
       for (let i = 0; i < 10; i++) {
         a.press([LIGHT, KICK, LIGHT, LIGHT][i % 4]);

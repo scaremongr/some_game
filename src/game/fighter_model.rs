@@ -181,6 +181,33 @@ struct Take {
     /// striking limb reaches ahead of the hips there.
     lunge: f32,
     reach: f32,
+    /// Walk cycles: ground covered by each frame (m, along the walking
+    /// direction, never going back) and the frame rate. A walk plays by
+    /// distance through this table, so its planted foot stays planted.
+    progress: Vec<f32>,
+    fps: f32,
+    /// The way the cycle walks: +1 forward, -1 back.
+    walks: f32,
+}
+
+impl Take {
+    /// Ground covered by one cycle (m); 0 for clips that do not travel.
+    fn stride(&self) -> f32 {
+        self.progress.last().copied().unwrap_or(0.0)
+    }
+    /// The clip time at which the cycle has covered `distance` (m, wraps)
+    /// walking the way `dir` says: a cycle walking the other way plays
+    /// backwards (a forward walk reversed walks back, feet still planted).
+    fn time_at(&self, distance: f32, dir: f32) -> f32 {
+        let stride = self.stride();
+        let u = distance.rem_euclid(stride.max(1e-3));
+        let u = if dir * self.walks < 0.0 { stride - u } else { u };
+        let p = &self.progress;
+        let f = p.partition_point(|&d| d <= u).clamp(1, p.len().max(2) - 1);
+        let span = (p[f] - p[f - 1]).max(1e-6);
+        let frac = ((u - p[f - 1]) / span).clamp(0.0, 1.0);
+        ((f - 1) as f32 + frac) / self.fps
+    }
 }
 
 /// Captured clips (Mixamo) that replace authored poses where available.
@@ -233,7 +260,9 @@ struct Side {
     secondary: Secondary,
     blockstun: u32,
     last_frame: f32,
+    /// Metres walked since the walk began, and its direction (+1 forward).
     walk_phase: f32,
+    walk_dir: f32,
     walk_weight: f32,
     last_x: f32,
     airborne: bool,
@@ -280,6 +309,7 @@ impl Side {
             blockstun: 0,
             last_frame: 0.0,
             walk_phase: 0.0,
+            walk_dir: 1.0,
             walk_weight: 0.0,
             last_x: f32::NAN,
             airborne: false,
@@ -528,6 +558,26 @@ impl Avatar {
                 Some((k, _)) if !hip.is_empty() => (hip[at].z - first.z, limb_at(at, k).z - hip[at].z),
                 _ => (0.0, 0.0),
             };
+            // Ground covered: the hips' advance minus the drift of the foot
+            // that stands (a clip with root motion keeps it still; an
+            // in-place cycle slides it back instead).
+            let progress = if name.contains("walk") {
+                let mut p = vec![0.0f32; n];
+                for f in 1..n.min(hip.len()) {
+                    let stance = if tracks[f - 1][3].y <= tracks[f - 1][4].y { 3 } else { 4 };
+                    p[f] = p[f - 1] + (hip[f].z - hip[f - 1].z) - (tracks[f][stance].z - tracks[f - 1][stance].z);
+                }
+                let sign: f32 = if p[n - 1] < 0.0 { -1.0 } else { 1.0 };
+                let mut covered = 0.0f32;
+                for d in &mut p {
+                    covered = covered.max(*d * sign);
+                    *d = covered;
+                }
+                (p, sign)
+            } else {
+                (Vec::new(), 1.0)
+            };
+            let (progress, walks) = progress;
             takes.insert(
                 clip.name.clone(),
                 Take {
@@ -538,6 +588,9 @@ impl Avatar {
                     stand_y: standing,
                     lunge,
                     reach,
+                    progress,
+                    fps: clip.fps,
+                    walks,
                 },
             );
         }
@@ -883,10 +936,22 @@ impl FighterModel {
                 Clip::Idle | Clip::Guard | Clip::Crouch | Clip::CrouchGuard
             );
             let speed = if dt > 0.0 { moved.abs() / dt } else { 0.0 };
-            let walking = grounded_neutral && speed > 0.25 && f.previous & 3 != 0;
+            // Walking: holding a direction and moving (a long frame must
+            // not stop the walk, so a few millimetres a frame also count).
+            let walking = grounded_neutral && (speed > 0.25 || moved.abs() > 0.002) && f.previous & 3 != 0;
             let stride = if f.guard || f.crouch { 0.45 } else { 0.72 };
-            if grounded_neutral {
-                s.walk_phase += moved / stride;
+            // Captured walks play by the distance walked (metres); a new walk
+            // starts its cycle from the stance.
+            if grounded_neutral && (walking || s.walk_weight > 0.01) {
+                // Turning back starts the other cycle from its stance.
+                let dir = if moved > 1e-4 { 1.0 } else if moved < -1e-4 { -1.0 } else { s.walk_dir };
+                if dir != s.walk_dir {
+                    s.walk_dir = dir;
+                    s.walk_phase = 0.0;
+                }
+                s.walk_phase = (s.walk_phase + moved * dir).max(0.0);
+            } else {
+                s.walk_phase = 0.0;
             }
             let target = if walking { 1.0 } else { 0.0 };
             s.walk_weight += (target - s.walk_weight) * (dt * 14.0).min(1.0);
@@ -1007,7 +1072,7 @@ impl FighterModel {
             }
 
             if grounded_neutral {
-                anims::walk_layer(&mut pose, s.walk_phase, s.walk_weight, stride);
+                anims::walk_layer(&mut pose, s.walk_phase / stride, s.walk_weight, stride);
                 if f.guard && f.blockstun > 0 {
                     let k = (f.blockstun as f32 / 12.0).min(1.0);
                     pose.hips.z -= 0.04 * k;
@@ -1309,18 +1374,23 @@ impl FighterModel {
                 self.pose.locals.clear();
                 self.pose.locals.extend(av.character.skeleton.bones.iter().map(|b| b.bind_local));
                 captured.lib.sample(clip_index, t, root_model, &mut self.pose);
-                // Stance breathes into the walk cycle as the fighter moves
-                // (a rig with planted feet steps by itself instead).
+                // The stance turns into the walk cycle as the fighter moves;
+                // the cycle plays by the distance walked, so the planted
+                // foot stays where it stands.
                 let crouched = matches!(clip, Clip::Crouch | Clip::CrouchGuard);
-                if (matches!(clip, Clip::Idle | Clip::Guard) || crouched) && av.ragdoll.is_none() {
-                    let key = match (crouched, moved >= 0.0) {
+                if matches!(clip, Clip::Idle | Clip::Guard) || crouched {
+                    let key = match (crouched, s.walk_dir >= 0.0) {
                         (false, true) => "walk_fwd",
                         (false, false) => "walk_back",
                         (true, true) => "crouch_walk_fwd",
                         (true, false) => "crouch_walk_back",
                     };
                     if let Some(walk) = captured.takes.get(key).filter(|_| s.walk_weight > 0.01) {
-                        let wt = s.walk_phase.rem_euclid(1.0) * walk.duration;
+                        let wt = if walk.stride() > 0.05 {
+                            walk.time_at(s.walk_phase, s.walk_dir)
+                        } else {
+                            (s.walk_phase / 0.6).rem_euclid(1.0) * walk.duration
+                        };
                         let walk_hips = av
                             .character
                             .transform
@@ -1331,6 +1401,14 @@ impl FighterModel {
                         captured.lib.sample(walk.clip, wt, to_model.transform_direction(w_shift), &mut self.scratch);
                         let idle = self.pose.clone();
                         self.pose.blend_from(&idle, &self.scratch, s.walk_weight);
+                        // A guarded walk keeps the forearms up.
+                        if clip == Clip::Guard {
+                            for (bone, &upper) in av.upper.iter().enumerate() {
+                                if upper {
+                                    self.pose.locals[bone].rotation = idle.locals[bone].rotation;
+                                }
+                            }
+                        }
                     }
                 }
                 // Crouching: legs and hips come from the crouch clip, the
@@ -1441,7 +1519,7 @@ impl FighterModel {
                 * Mat4::from_trs(Vec3::ZERO, Quat::from_axis_angle(Vec3::Y, yaw), vec3(1.0, 1.0, 1.0));
             s.to_body = rotation.invert();
             // Feet planted on the floor while standing and walking.
-            let standing = grounded_neutral && captured_pose.is_some();
+            let standing = grounded_neutral && captured_pose.is_some() && !walking && s.walk_weight < 0.5;
             match (&av.ragdoll, view.preview) {
                 (Some(rig), false) => s.feet.apply(
                     av.hips,
@@ -1665,6 +1743,52 @@ mod tests {
         assert!(model.sides[0].turn > 0.95 && model.sides[1].turn < 0.05);
     }
 
+    #[test]
+    fn captured_walks_keep_the_standing_foot_planted() {
+        let Ok(pack) = std::fs::read("assets/fight.pack") else { return };
+        let mut model = FighterModel::load(&std::fs::read("assets/character.glb").unwrap()).unwrap();
+        model.set_captured(0, &pack).unwrap();
+        let (forward, back) = (arena_combat::WALK_FORWARD as f32 / 1000.0, arena_combat::WALK_BACK as f32 / 1000.0);
+        for (bits, speed, label) in [(2u32, forward, "forward"), (1, -back, "back")] {
+            let mut game = arena_combat::Match::default();
+            game.fighters[0].previous = bits;
+            let mut v = view();
+            model.sides[0] = Side::new();
+            let mut track: Vec<[Vec3; 2]> = vec![];
+            for frame in 0..180 {
+                v.time = frame as f32 / 60.0;
+                let mut b = bodies(&game.fighters, 0.0);
+                b[0].x = -1.0 + speed * frame as f32;
+                model.update(&game.fighters, &b, &v);
+                let toes = model.avatars[0].bones;
+                track.push([model.bone_world(0, toes[2]), model.bone_world(0, toes[3])]);
+            }
+            // Each stretch a toe stays on the floor, past the walk's start,
+            // without the touchdown and lift-off frames (a captured foot
+            // glides in and out over the last centimetres).
+            let (mut worst, mut planted, mut steps) = (0.0f32, 0, 0);
+            for i in 0..2 {
+                let mut run = vec![];
+                for (f, feet) in track.iter().enumerate().skip(20) {
+                    if feet[i].y < 0.012 {
+                        run.push(f);
+                        continue;
+                    }
+                    if run.len() >= 6 {
+                        steps += 1;
+                        for w in run[2..run.len() - 2].windows(2) {
+                            worst = worst.max((track[w[1]][i].x - track[w[0]][i].x).abs());
+                            planted += 1;
+                        }
+                    }
+                    run.clear();
+                }
+            }
+            eprintln!("{label}: {steps} steps, worst slide of a standing toe {:.1} mm/frame over {planted} frames", worst * 1000.0);
+            assert!(steps >= 3, "{label}: only {steps} steps in three seconds");
+            assert!(worst < 0.004, "{label}: a standing foot slides {worst} m per frame");
+        }
+    }
     #[test]
     fn two_different_fighters_pose_every_state() {
         // Kachujin's rig has more bones than the engine keeps, so its clips

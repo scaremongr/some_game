@@ -29,17 +29,19 @@ test('two clients: matchmaking, authoritative hits, sequence validation, resume,
     assert.deepEqual(ma.players.map(p=>p.fighter),['medea','medea']);assert.deepEqual(mb.players,ma.players);
     await a.wait('state',m=>m.state.phase===1);
     a.send({type:'input',seq:1,bits:2,hp:99999,x:99999});b.send({type:'input',seq:1,bits:1});
-    await delay(230);a.send({type:'input',seq:2,bits:2});b.send({type:'input',seq:2,bits:1});
-    await delay(180);a.send({type:'input',seq:3,bits:8});b.send({type:'input',seq:3,bits:0});
+    // Walk into jab range (both walk at 15 mm/tick, combat WALK_FORWARD);
+    // held inputs are refreshed within the server's 250 ms expiry.
+    for(let k=2;k<7;k++){await delay(200);a.send({type:'input',seq:k,bits:2});b.send({type:'input',seq:k,bits:1});}
+    await delay(100);a.send({type:'input',seq:7,bits:8});b.send({type:'input',seq:7,bits:0});
     const hit=await a.wait('state',m=>m.state.fighters[1].hp<100);
     assert.equal(hit.state.fighters[1].hp,93); // jab: 7 damage (combat/src/moves.rs)
     const same=await b.wait('state',m=>m.state.tick===hit.state.tick);assert.deepEqual(same.state,hit.state);
-    a.send({type:'input',seq:2,bits:16});a.send({type:'input',seq:4,bits:8192});
-    const validated=await a.wait('state',m=>m.state.tick>hit.state.tick);assert.equal(validated.ack[0],3);
+    a.send({type:'input',seq:6,bits:16});a.send({type:'input',seq:8,bits:8192});
+    const validated=await a.wait('state',m=>m.state.tick>hit.state.tick);assert.equal(validated.ack[0],7);
     await a.wait('state',m=>m.state.tick>validated.state.tick && m.state.phase===1 && m.state.fighters[0].action===0);
-    a.send({type:'input',seq:5,bits:2048});
+    a.send({type:'input',seq:9,bits:2048});
     const smashed=await a.wait('state',m=>m.state.objects.some(o=>o.hp===0));
-    assert.equal(smashed.ack[0],5);
+    assert.equal(smashed.ack[0],9);
     const otherRoom=await b.wait('state',m=>m.state.tick===smashed.state.tick);
     assert.deepEqual(otherRoom.state.objects,smashed.state.objects);
     a.ws.close();await b.wait('state',m=>m.paused);
