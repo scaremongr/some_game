@@ -469,6 +469,8 @@ function accept(next, isPaused = false, final = next.phase === 3) {
 }
 function breakerReady() { const mine = state?.fighters[side]; return !!mine && (mine.stun > 0 || (mine.juggle > 0 && mine.y > 0)) && mine.down === 0 && mine.meter >= 1000; }
 
+// Dev review hook (local server only): edit the training fight's state.
+window.arenaTrainingEdit = edit => { if (!config.dev || !local) return false; const st = local.state(); edit(st); return local.load(st); };
 function startPractice() {
   if (!module) return;
   if (authenticated) send({ type: 'leave' });

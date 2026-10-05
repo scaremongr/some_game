@@ -4,13 +4,15 @@
 //   node scripts/frame-strip.mjs <out-dir> [script]
 // script: keys and durations, e.g. "d:1500,_:400,a:1500" (key or '_' for
 // nothing, ms of virtual time); every 4th frame (15 fps) is saved as PNG,
-// cropped around the left fighter. FIGHTER=<id> picks the fighter.
+// FIGHTER=<id> picks the fighter. A third argument edits the training state
+// first (see below), e.g. to stage a knockout.
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createArena } from '../server/index.mjs';
 process.env.PLAYWRIGHT_BROWSERS_PATH ||= resolve('.browsers');
 const { chromium } = await import('playwright');
-const [outDir = 'artifacts/strip', script = 'd:1500,_:500,a:1500,_:500'] = process.argv.slice(2);
+const EVERY = Number(process.env.EVERY || 4);
+const [outDir = 'artifacts/strip', script = 'd:1500,_:500,a:1500,_:500', setup = ''] = process.argv.slice(2);
 await mkdir(outDir, { recursive: true });
 const app = await createArena({ dev: true });
 app.server.listen(0, '127.0.0.1'); await new Promise(r => app.server.once('listening', r));
@@ -40,10 +42,13 @@ try {
   await p.click('#practice'); await p.click('#training-mode');
   await p.waitForFunction(() => JSON.parse(new TextDecoder().decode(window.arenaRenderBytes)).phase === 1, {}, { timeout: 10000 });
   await p.waitForTimeout(500);
+  // Optional setup: a JS body run on the training state `s`, e.g.
+  // "s.fighters[1].hp=5;s.fighters[0].x=-450;s.fighters[1].x=450" (dev only).
+  if (setup) await p.evaluate(code => window.arenaTrainingEdit(new Function('s', code)), setup);
   await p.evaluate(() => window.__start());
   await p.waitForTimeout(200);
   const advance = ms => p.evaluate(ms => window.__frame(ms), ms);
-  const codes = { d: 'KeyD', a: 'KeyA', s: 'KeyS', c: 'KeyC', j: 'KeyJ', k: 'KeyK', u: 'KeyU' };
+  const codes = { d: 'KeyD', a: 'KeyA', s: 'KeyS', c: 'KeyC', j: 'KeyJ', k: 'KeyK', u: 'KeyU', l: 'KeyL', w: 'KeyW' };
   let frame = 0;
   for (const part of script.split(',')) {
     const [keys, ms] = part.split(':');
@@ -51,9 +56,9 @@ try {
     for (const k of down) await p.evaluate(code => window.dispatchEvent(new KeyboardEvent('keydown', { code })), codes[k]);
     for (let t = 0; t < Number(ms); t += 1000 / 60) {
       await advance(1000 / 60);
-      if (frame++ % 4 === 0) await p.screenshot({ path: `${outDir}/f-${String(frame).padStart(4, '0')}.png` });
+      if (frame++ % EVERY === 0) await p.screenshot({ path: `${outDir}/f-${String(frame).padStart(4, '0')}.png` });
     }
     for (const k of down) await p.evaluate(code => window.dispatchEvent(new KeyboardEvent('keyup', { code })), codes[k]);
   }
-  console.log(`${Math.ceil(frame / 4)} frames in ${outDir}`);
+  console.log(`${Math.ceil(frame / EVERY)} frames in ${outDir}`);
 } finally { await browser.close(); await app.close(); }

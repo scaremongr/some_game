@@ -9,7 +9,7 @@ use super::{
     anims::{self, Library, Reaction},
     body::{BodyPose, BodyRig, LEAD, REAR},
     dancer::Character,
-    feet::Feet,
+    feet::{stretch_stride, Feet},
     mocap::{strike_limb, strike_marks, Marks, MocapLib},
     ragdoll::{Drive, Part, Ragdoll, RagdollRig},
     timeline::Body,
@@ -23,7 +23,6 @@ const CAMERA_TURN: f32 = 0.10;
 /// Share of the recoil springs shown on captured poses, which already carry
 /// their own reaction.
 const RECOIL: f32 = 0.6;
-const GRAVITY: f32 = 5.0 * 60.0 * 60.0 / 1000.0;
 /// Frames of a knockdown spent falling and lying; the rest is the get-up.
 const DOWN_FALL: f32 = 22.0;
 /// Frame of a knockdown at which a captured fall hits the floor.
@@ -72,19 +71,10 @@ pub struct View {
     pub freeze: u32,
     pub victim: usize,
     pub reaction: [Reaction; 2],
-    /// Arena limits for bodies flying after a knockout.
-    pub bounds: [f32; 2],
     /// Screenshot mode: no extrapolation, clips time from the frame counter.
     pub preview: bool,
     /// Picks between equivalent takes (victory and defeat poses).
     pub variant: u32,
-}
-
-struct Ko {
-    x: f32,
-    y: f32,
-    vx: f32,
-    vy: f32,
 }
 
 /// Damped spring used for secondary motion (overlap, follow-through, recoil).
@@ -188,12 +178,18 @@ struct Take {
     fps: f32,
     /// The way the cycle walks: +1 forward, -1 back.
     walks: f32,
+    /// Average fore-and-aft place of each toe under the hips over the cycle.
+    feet_mean: [f32; 2],
 }
 
 impl Take {
     /// Ground covered by one cycle (m); 0 for clips that do not travel.
     fn stride(&self) -> f32 {
         self.progress.last().copied().unwrap_or(0.0)
+    }
+    /// The walk's own speed (m/s).
+    fn pace(&self) -> f32 {
+        self.stride() / self.duration.max(0.1)
     }
     /// The clip time at which the cycle has covered `distance` (m, wraps)
     /// walking the way `dir` says: a cycle walking the other way plays
@@ -223,7 +219,8 @@ enum Travel {
     InPlace,
     /// Strikes and reactions: travel kept, then eased back home.
     Return,
-    /// Knockouts: the body keeps flying.
+    /// Knockouts falling from standing: the fall's step back is kept (its
+    /// drift sideways is not).
     Keep,
     /// Airborne: the simulation owns the height too. The hips are held at
     /// standing height (weight 1) so the root arc is not doubled; lower
@@ -260,13 +257,24 @@ struct Side {
     secondary: Secondary,
     blockstun: u32,
     last_frame: f32,
-    /// Metres walked since the walk began, and its direction (+1 forward).
+    /// Ground covered by the walk cycle since the walk began (m of the
+    /// captured cycle: the distance walked over `1 + stretch`), and the
+    /// walking direction (+1 forward).
     walk_phase: f32,
     walk_dir: f32,
+    /// Walking speed (m/s, smoothed) and the stride stretch it calls for.
+    walk_speed: f32,
+    stretch: f32,
+    /// Stride stretch to apply to this frame's pose, with the take's means.
+    stride: Option<([f32; 2], f32)>,
     walk_weight: f32,
     last_x: f32,
     airborne: bool,
-    ko: Option<Ko>,
+    /// Knocked out: launched (flies with the simulation, then lies), when
+    /// it landed and seconds since the knockout.
+    ko_flight: bool,
+    ko_land: Option<f32>,
+    ko_time: f32,
     root: Vec3,
     /// Bone-space cross-fade shared by captured and authored poses.
     out_locals: Pose,
@@ -310,10 +318,15 @@ impl Side {
             last_frame: 0.0,
             walk_phase: 0.0,
             walk_dir: 1.0,
+            walk_speed: 0.0,
+            stretch: 0.0,
+            stride: None,
             walk_weight: 0.0,
             last_x: f32::NAN,
             airborne: false,
-            ko: None,
+            ko_flight: false,
+            ko_land: None,
+            ko_time: 0.0,
             root: Vec3::ZERO,
             out_locals: Pose { locals: Vec::new() },
             from_locals: Pose { locals: Vec::new() },
@@ -578,6 +591,12 @@ impl Avatar {
                 (Vec::new(), 1.0)
             };
             let (progress, walks) = progress;
+            let feet_mean = if progress.is_empty() {
+                [0.0; 2]
+            } else {
+                let mean = |k: usize| (0..n).map(|f| tracks[f][k].z - hip[f].z).sum::<f32>() / n as f32;
+                [mean(3), mean(4)]
+            };
             takes.insert(
                 clip.name.clone(),
                 Take {
@@ -591,6 +610,7 @@ impl Avatar {
                     progress,
                     fps: clip.fps,
                     walks,
+                    feet_mean,
                 },
             );
         }
@@ -889,7 +909,34 @@ impl FighterModel {
                     s.dance_start = s.clip_time + view.dt;
                 }
             }
-            let take_key = self.take_for(side, clip, body.frame, (bodies[1 - side].x - body.x).abs(), jump_dir, thrown, view.variant);
+            // A knockout follows the simulation: a launched body flies (the
+            // flight take, landing with the simulated body), then lies; one
+            // knocked out on its feet falls on its back.
+            if clip == Clip::Knockout {
+                let s = &mut self.sides[side];
+                if s.clip != Clip::Knockout {
+                    s.ko_flight = body.y > 0.02 || f.vx.abs() > 50;
+                    s.ko_land = None;
+                    s.ko_time = 0.0;
+                } else {
+                    s.ko_time += view.dt;
+                }
+                if s.ko_flight && s.ko_land.is_none() && body.y <= 0.002 && s.ko_time > 0.05 {
+                    s.ko_land = Some(s.ko_time);
+                    if !view.preview {
+                        self.impacts.push((vec3(body.x - facing_of(f) * 0.45, 0.0, 0.0), 1.3));
+                    }
+                }
+            }
+            let (ko_flight, ko_land, ko_time) = (self.sides[side].ko_flight, self.sides[side].ko_land, self.sides[side].ko_time);
+            let take_clip = match (clip, ko_flight, ko_land) {
+                (Clip::Knockout, true, None) => Clip::AirHit,
+                (Clip::Knockout, true, Some(_)) => Clip::Down(true),
+                _ => clip,
+            };
+            let take_key = self
+                .take_for(side, take_clip, body.frame, (bodies[1 - side].x - body.x).abs(), jump_dir, thrown, view.variant)
+                .or_else(|| (take_clip != clip).then(|| self.take_for(side, clip, body.frame, 0.0, 0.0, false, view.variant)).flatten());
             let dt = view.dt;
             let av = &self.avatars[self.which[side]];
             let s = &mut self.sides[side];
@@ -949,12 +996,19 @@ impl FighterModel {
                     s.walk_dir = dir;
                     s.walk_phase = 0.0;
                 }
-                s.walk_phase = (s.walk_phase + moved * dir).max(0.0);
+                s.walk_phase = (s.walk_phase + moved * dir / (1.0 + s.stretch * s.walk_weight)).max(0.0);
             } else {
                 s.walk_phase = 0.0;
             }
+            // A walk starts at its pace; then the speed is smoothed.
+            let starting = s.walk_weight < 0.3;
             let target = if walking { 1.0 } else { 0.0 };
             s.walk_weight += (target - s.walk_weight) * (dt * 14.0).min(1.0);
+            if dt > 0.0 {
+                let k = if starting { 1.0 } else { 1.0 - (-dt * 8.0).exp() };
+                s.walk_speed += (speed.min(4.0) - s.walk_speed) * k;
+            }
+            s.stride = None;
 
             // Physical impulses: landings, blocks and the first frame of a hit.
             let air = body.y > 0.002;
@@ -1162,42 +1216,10 @@ impl FighterModel {
                 pose.shift.z += (view.time * 95.0).sin() * 0.022;
             }
 
-            // Root: authoritative position, or our own flight after a knockout.
-            let mut root = vec3(x, body.y, 0.0);
-            if clip == Clip::Knockout {
-                let ko = s.ko.get_or_insert(Ko {
-                    x,
-                    y: body.y,
-                    vx: f.vx as f32 * 0.06 - facing * 1.8,
-                    vy: (f.vy as f32 * 0.06).max(1.2),
-                });
-                if !view.preview {
-                    let was_airborne = ko.y > 0.0;
-                    ko.vy -= GRAVITY * dt;
-                    ko.x += ko.vx * dt;
-                    ko.y = (ko.y + ko.vy * dt).max(0.0);
-                    if ko.y <= 0.0 {
-                        ko.vy = 0.0;
-                        ko.vx *= (1.0 - dt * 5.0).max(0.0);
-                    }
-                    if ko.x < view.bounds[0] || ko.x > view.bounds[1] {
-                        ko.x = ko.x.clamp(view.bounds[0], view.bounds[1]);
-                        ko.vx *= -0.12;
-                    }
-                    // Never slide back through the winner.
-                    let other = bodies[1 - side].x;
-                    if (ko.x - other) * facing > -0.55 {
-                        ko.x = other - facing * 0.55;
-                        ko.vx = 0.0;
-                    }
-                    if was_airborne && ko.y <= 0.0 && landing.is_none() {
-                        self.impacts.push((vec3(ko.x - facing * 0.45, 0.0, 0.0), 1.3));
-                    }
-                }
-                root = vec3(ko.x, ko.y, 0.0);
-            } else {
-                s.ko = None;
-            }
+            // Root: the authoritative position — a knocked out body too keeps
+            // flying and sliding with the simulation (which runs on through
+            // the round's end).
+            let root = vec3(x, body.y, 0.0);
             s.root = root;
 
             // The right-hand fighter is drawn as a mirror image of the model,
@@ -1284,7 +1306,19 @@ impl FighterModel {
                             let u = (frame / arena_combat::HOLD as f32).clamp(0.0, 1.0);
                             (take.marks.start + (take.marks.end - take.marks.start) * u, Travel::InPlace)
                         }
-                        Clip::Knockout => (take.marks.start + clip_frames / 60.0, Travel::Keep),
+                        Clip::Knockout => match (ko_flight, ko_land) {
+                            (true, None) => {
+                                // Flying: the take lands when the simulated body does.
+                                let (y, vy) = (body.y.max(0.0) * 1000.0, body.vy);
+                                let land = (vy + (vy * vy + 10.0 * y).sqrt()) / 5.0;
+                                let flown = ko_time * 60.0;
+                                let u = (flown / (flown + land).max(1.0)).clamp(0.0, 1.0);
+                                (take.marks.start + (take.marks.contact - take.marks.start) * u, Travel::Air(1.0 - u))
+                            }
+                            // On the floor: plays on from the landing and lies still.
+                            (true, Some(at)) => (take.marks.start + (ko_time - at), Travel::InPlace),
+                            _ => (take.marks.start + clip_frames / 60.0, Travel::Keep),
+                        },
                         Clip::Victory | Clip::Defeat => (clip_frames / 60.0, Travel::InPlace),
                         Clip::Dance => ((s.clip_time - s.dance_start).max(0.0), Travel::Sway),
                         Clip::Guard if key == "block" => (block_time, Travel::InPlace),
@@ -1330,6 +1364,8 @@ impl FighterModel {
                     _ => 0.5,
                 };
                 let mut shift = match travel {
+                    // A knockout's fall keeps its step back, not its drift sideways.
+                    Travel::Keep => vec3(-take.start_hips.x - moved_in.x, 0.0, -take.start_hips.z),
                     Travel::InPlace => vec3(-hips_now.x, 0.0, -hips_now.z),
                     // Dances keep their sway but not their travel.
                     Travel::Sway => {
@@ -1386,6 +1422,14 @@ impl FighterModel {
                         (true, false) => "crouch_walk_back",
                     };
                     if let Some(walk) = captured.takes.get(key).filter(|_| s.walk_weight > 0.01) {
+                        // Faster than the capture's own pace (up to about 1.55
+                        // times its cadence): longer strides, not quicker steps.
+                        if walk.stride() > 0.05 {
+                            let wanted = (s.walk_speed / (walk.pace() * 1.55) - 1.0).clamp(0.0, 0.8);
+                            let k = if starting { 1.0 } else { 1.0 - (-dt * 6.0).exp() };
+                            s.stretch += (wanted - s.stretch) * k;
+                            s.stride = Some((walk.feet_mean, s.stretch * s.walk_weight));
+                        }
                         let wt = if walk.stride() > 0.05 {
                             walk.time_at(s.walk_phase, s.walk_dir)
                         } else {
@@ -1471,9 +1515,6 @@ impl FighterModel {
                 if head_lean.abs() > 1e-3 {
                     lean(&av.character, &mut self.pose, &mut self.globals[side], head, head_lean);
                 }
-                if clip == Clip::Knockout {
-                    root = vec3(s.ko.as_ref().map_or(x, |k| k.x), 0.0, 0.0);
-                }
             } else {
                 av.rig.solve(&solved, look, &mut self.pose);
             }
@@ -1518,7 +1559,21 @@ impl FighterModel {
             let rotation = Mat4::from_trs(Vec3::ZERO, Quat::IDENTITY, vec3(flip, 1.0, 1.0))
                 * Mat4::from_trs(Vec3::ZERO, Quat::from_axis_angle(Vec3::Y, yaw), vec3(1.0, 1.0, 1.0));
             s.to_body = rotation.invert();
-            // Feet planted on the floor while standing and walking.
+            // A fast walk lengthens its strides.
+            if let (Some(rig), Some((means, stretch)), false) = (&av.ragdoll, s.stride, view.preview) {
+                stretch_stride(
+                    &av.character.skeleton,
+                    &mut self.pose,
+                    &mut self.globals[side],
+                    av.character.transform,
+                    av.hips,
+                    [rig.leg(0), rig.leg(1)],
+                    [av.bones[2], av.bones[3]],
+                    means,
+                    stretch,
+                );
+            }
+            // Feet planted on the floor while standing still.
             let standing = grounded_neutral && captured_pose.is_some() && !walking && s.walk_weight < 0.5;
             match (&av.ragdoll, view.preview) {
                 (Some(rig), false) => s.feet.apply(
@@ -1538,10 +1593,7 @@ impl FighterModel {
             // Physical layer: hits, inertia, gravity on a loose body. The
             // root's velocity comes from the simulation (or the knockout
             // flight), never from rendered positions.
-            let root_velocity = match &s.ko {
-                Some(ko) if clip == Clip::Knockout => vec3(ko.vx, 0.0, 0.0),
-                _ => vec3(f.vx as f32, f.vy as f32, 0.0) * 0.06,
-            };
+            let root_velocity = vec3(f.vx as f32, f.vy as f32, 0.0) * 0.06;
             match (&av.ragdoll, view.preview) {
                 (Some(rig), false) => s.ragdoll.apply(
                     rig,
@@ -1580,6 +1632,10 @@ fn drive(clip: Clip, frame: f32) -> Drive {
         Clip::Knockout => LIMP,
         _ => Drive::FULL,
     }
+}
+
+fn facing_of(f: &Fighter) -> f32 {
+    f.facing.signum() as f32
 }
 
 /// The limb that lands `action` for this body: as authored, except the
@@ -1643,7 +1699,6 @@ mod tests {
             freeze: 0,
             victim: 1,
             reaction: [Reaction::Head; 2],
-            bounds: [-3.0, 3.0],
             preview: false,
             variant: 0,
         }
@@ -1681,9 +1736,9 @@ mod tests {
             model.update(&game.fighters, &bodies(&game.fighters, 0.0), &v);
         }
         assert!(model.placement[0].0.iter().all(|x| x.is_finite()));
-        // The knocked-out body comes to rest on the floor, inside the room.
+        // The knocked-out body lies where the simulation put it.
         let root = model.root(0);
-        assert!(root.y.abs() < 1e-3 && root.x >= -3.0 && root.x < -1.0, "{root:?}");
+        assert!(root.y.abs() < 1e-3 && (root.x + 1.0).abs() < 1e-3, "{root:?}");
     }
 
     #[test]

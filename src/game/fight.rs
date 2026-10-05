@@ -142,6 +142,10 @@ pub struct FightScene {
     layout: [f32; 4],
     /// Seconds of knockout slow motion left, and who has been seen KO'd.
     slowmo: f32,
+    /// Ticks the view runs behind the simulation: the knockout's slow
+    /// motion slows the whole scene (bodies fly slower too), then it
+    /// catches up.
+    lag: f64,
     knocked: [bool; 2],
     /// 0..1: the camera has moved in on the dancing winner.
     celebrate: f32,
@@ -207,6 +211,7 @@ impl FightScene {
             debug_camera: None,
             layout: [0.16, 0.95, 0.0, 1.0],
             slowmo: 0.0,
+            lag: 0.0,
             knocked: [false; 2],
             celebrate: 0.0,
         }
@@ -226,6 +231,7 @@ impl FightScene {
             self.last_event = state.event;
             self.reaction = [Reaction::Head; 2];
             self.celebrate = 0.0;
+            self.lag = 0.0;
             if let Some(model) = &mut self.model {
                 model.reset();
             }
@@ -404,6 +410,7 @@ impl FightScene {
 
     /// Everything visual, at the display's refresh rate.
     fn animate(&mut self, dt: f32, render_tick: f64) {
+        let render_tick = render_tick - self.lag;
         let Some(sample) = self.timeline.sample(render_tick) else {
             return;
         };
@@ -423,11 +430,19 @@ impl FightScene {
             self.knocked[side] = out;
         }
         let real_dt = dt;
-        let dt = if self.slowmo > 0.0 {
+        let speed = if self.slowmo > 0.0 {
             let k = 1.0 - self.slowmo / SLOWMO;
-            dt * (0.22 + 0.78 * k * k)
+            0.22 + 0.78 * k * k
         } else {
-            dt
+            1.0
+        };
+        let dt = dt * speed;
+        // The simulation does not slow down: the view falls behind it and
+        // then catches up at 1.6 times the speed.
+        self.lag = if self.slowmo > 0.0 {
+            self.lag + (1.0 - speed as f64) * real_dt as f64 * 60.0
+        } else {
+            (self.lag - real_dt as f64 * 60.0 * 0.6).max(0.0)
         };
         self.slowmo = (self.slowmo - real_dt).max(0.0);
         if current.phase != self.phase {
@@ -486,7 +501,6 @@ impl FightScene {
                     }
                 }
             }
-            let bound = arena_combat::room::ARENA_LIMIT as f32 / 1000.0 - 0.05;
             let view = View {
                 dt,
                 time: self.time,
@@ -496,7 +510,6 @@ impl FightScene {
                 freeze: current.freeze,
                 victim: current.event_target.min(1),
                 reaction: self.reaction,
-                bounds: [-bound, bound],
                 preview,
                 variant: current.round,
             };

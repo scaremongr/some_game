@@ -10,7 +10,9 @@
 use arena_combat::{Fighter, Match};
 use std::collections::VecDeque;
 
-const HISTORY: usize = 16;
+/// Snapshots kept: enough for the knockout's slow motion, during which the
+/// view runs up to about 40 ticks behind (every tick is a snapshot locally).
+const HISTORY: usize = 160;
 const MAX_EXTRAPOLATION: f64 = 4.0;
 
 /// Continuous kinematics of one fighter at the render tick.

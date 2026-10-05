@@ -102,27 +102,11 @@ impl Feet {
         let to_model = body.invert();
         let to_body = place.invert();
         let targets = [0, 1].map(|i| to_body.transform_point(home[i].lerp(feet[i], self.weight)));
-        let at = |globals: &Vec<Mat4>, bone: usize| body.transform_point(globals[bone].transform_point(Vec3::ZERO));
-        let mut sink: f32 = 0.0;
-        for i in 0..2 {
-            let [up, knee, foot] = legs[i];
-            let hip = at(globals, up);
-            let length = ((at(globals, knee) - hip).length() + (at(globals, foot) - at(globals, knee)).length()) * 0.97;
-            let d = targets[i] - hip;
-            let across = (d.x * d.x + d.z * d.z).sqrt().min(length);
-            let fits = (length * length - across * across).sqrt();
-            sink = sink.max(-d.y - fits);
-        }
-        let sink = sink.clamp(0.0, 0.15) * self.weight;
+        let sink = sink_needed(globals, body, legs, targets) * self.weight;
         // Sinks at once when a leg needs it (a foot never slides for want of
         // reach), rises back gently.
         self.sink = if sink > self.sink { sink } else { self.sink + (sink - self.sink) * (1.0 - (-dt * 12.0).exp()) };
-        if self.sink > 1e-4 {
-            let down = to_model.transform_direction(vec3(0.0, -self.sink, 0.0));
-            let parent = skeleton.bones[hips].parent.map_or(Mat4::IDENTITY, |b| globals[b]);
-            pose.locals[hips].translation += parent.invert().transform_direction(down);
-            skeleton.global_matrices(pose, globals);
-        }
+        lower_hips(skeleton, pose, globals, to_model, hips, self.sink);
         for i in 0..2 {
             reach(skeleton, pose, globals, body, to_model, legs[i], targets[i]);
         }
@@ -179,6 +163,67 @@ impl Feet {
             self.swing[i] = Some(Swing { from: self.planted[i], t: 0.0, len });
         }
     }
+}
+
+/// Lengthens the steps of a captured walk: each foot's distance fore and aft
+/// from its average place under the hips (`means`, toe z in body space over
+/// the cycle) grows by `stretch`, so a faster walk takes longer strides
+/// instead of quicker ones; the legs reach with IK, the hips sink if needed.
+/// The walk must then play `1 + stretch` times slower per metre.
+#[allow(clippy::too_many_arguments)]
+pub fn stretch_stride(
+    skeleton: &Skeleton,
+    pose: &mut Pose,
+    globals: &mut Vec<Mat4>,
+    body: Mat4,
+    hips: usize,
+    legs: [[usize; 3]; 2],
+    toes: [usize; 2],
+    means: [f32; 2],
+    stretch: f32,
+) {
+    if stretch <= 1e-3 {
+        return;
+    }
+    skeleton.global_matrices(pose, globals);
+    let at = |globals: &Vec<Mat4>, bone: usize| body.transform_point(globals[bone].transform_point(Vec3::ZERO));
+    let centre = at(globals, hips).z;
+    let targets = [0, 1].map(|i| {
+        let off = at(globals, toes[i]).z - centre - means[i];
+        at(globals, legs[i][2]) + vec3(0.0, 0.0, off * stretch)
+    });
+    let to_model = body.invert();
+    let sink = sink_needed(globals, body, legs, targets);
+    lower_hips(skeleton, pose, globals, to_model, hips, sink);
+    for i in 0..2 {
+        reach(skeleton, pose, globals, body, to_model, legs[i], targets[i]);
+    }
+}
+
+/// How far the hips must come down for both ankles to reach their targets.
+fn sink_needed(globals: &[Mat4], body: Mat4, legs: [[usize; 3]; 2], targets: [Vec3; 2]) -> f32 {
+    let at = |bone: usize| body.transform_point(globals[bone].transform_point(Vec3::ZERO));
+    let mut sink: f32 = 0.0;
+    for i in 0..2 {
+        let [up, knee, foot] = legs[i];
+        let hip = at(up);
+        let length = ((at(knee) - hip).length() + (at(foot) - at(knee)).length()) * 0.97;
+        let d = targets[i] - hip;
+        let across = (d.x * d.x + d.z * d.z).sqrt().min(length);
+        let fits = (length * length - across * across).sqrt();
+        sink = sink.max(-d.y - fits);
+    }
+    sink.clamp(0.0, 0.15)
+}
+
+fn lower_hips(skeleton: &Skeleton, pose: &mut Pose, globals: &mut Vec<Mat4>, to_model: Mat4, hips: usize, sink: f32) {
+    if sink <= 1e-4 {
+        return;
+    }
+    let down = to_model.transform_direction(vec3(0.0, -sink, 0.0));
+    let parent = skeleton.bones[hips].parent.map_or(Mat4::IDENTITY, |b| globals[b]);
+    pose.locals[hips].translation += parent.invert().transform_direction(down);
+    skeleton.global_matrices(pose, globals);
 }
 
 /// Two-bone IK: turns the hip and knee of `leg` so the ankle reaches

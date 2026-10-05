@@ -157,9 +157,18 @@ Principles:
   so root-motion and in-place cycles both work) and the rendered distance
   walked picks the clip time. The standing foot stays planted (test
   `captured_walks_keep_the_standing_foot_planted`, < 2 mm/frame). Walk speed
-  15 mm/tick forward, 12 back, 9 guarded or crouched (`WALK_FORWARD/BACK/SLOW`
-  in `combat`), near the clip's natural pace. A guarded walk keeps the block
+  24 mm/tick forward, 20 back, 12 guarded or crouched (`WALK_FORWARD/BACK/SLOW`
+  in `combat`). Faster than the clip's own pace (up to ~1.55× its cadence)
+  the strides lengthen instead (`feet::stretch_stride`: each foot's fore-aft
+  offset from its cycle mean grows, legs reach with IK, the hips sink) and the
+  cycle plays proportionally slower per metre. A guarded walk keeps the block
   arms; `feet.rs` plants the feet once the walk stops.
+- Knockout: the body follows the simulation (which keeps falling and sliding
+  through the round's end, `Match::settle`): a launched body plays `air_hit`
+  landing with the simulated body, then `air_down` from the landing, limp
+  (physical layer); one knocked out on its feet plays `ko`. The KO slow
+  motion slows the whole view (`FightScene::lag`: the view falls behind the
+  simulation and catches up at 1.6×), so the flight is slowed, not cut.
 - Baked room: `tools/room/apartment.py` authors five open furnished rooms;
   `build_room.py` supplies Blender import/material/preview helpers. CC0 Poly Haven
   assets and seamless architectural surfaces, with 22 additional model types.

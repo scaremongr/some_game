@@ -22,12 +22,12 @@ pub const EDGE_MASK: u32 = LIGHT | HEAVY | DASH | THROW | KICK | JUMP | SPECIAL 
 pub const KNOCKDOWN: u32 = 56;
 /// A guard raised this many ticks before the blow parries it.
 pub const PARRY: u32 = 6;
-/// Walking speed (mm/tick): 0.9 m/s forward, 0.72 m/s back, 0.54 m/s
-/// guarded or crouched — a brisk version of the captured fight-stance walk
-/// (it plays by distance, so the feet stay planted); the dash covers ground.
-pub const WALK_FORWARD: i32 = 15;
-pub const WALK_BACK: i32 = 12;
-pub const WALK_SLOW: i32 = 9;
+/// Walking speed (mm/tick): 1.44 m/s forward, 1.2 m/s back, 0.72 m/s
+/// guarded or crouched. The captured walk plays by distance with longer
+/// strides at speed (fighter_model.rs), so the feet stay planted.
+pub const WALK_FORWARD: i32 = 24;
+pub const WALK_BACK: i32 = 20;
+pub const WALK_SLOW: i32 = 12;
 /// After lowering the guard, raising it again within this many ticks blocks
 /// without the parry window: tapping the button is not a free parry.
 pub const PARRY_COOLDOWN: u32 = 18;
