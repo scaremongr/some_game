@@ -22,6 +22,9 @@ pub const EDGE_MASK: u32 = LIGHT | HEAVY | DASH | THROW | KICK | JUMP | SPECIAL 
 pub const KNOCKDOWN: u32 = 56;
 /// A guard raised this many ticks before the blow parries it.
 pub const PARRY: u32 = 6;
+/// Walking speed (mm/tick): 1.56 m/s forward, 1.32 m/s back.
+pub const WALK_FORWARD: i32 = 26;
+pub const WALK_BACK: i32 = 22;
 /// After lowering the guard, raising it again within this many ticks blocks
 /// without the parry window: tapping the button is not a free parry.
 pub const PARRY_COOLDOWN: u32 = 18;
@@ -542,7 +545,16 @@ impl Match {
             if f.action == 0 {
                 let movement = i32::from(input & RIGHT != 0) - i32::from(input & LEFT != 0);
                 if f.y == 0 {
-                    f.x += movement * if f.guard || f.crouch { 12 } else { 38 };
+                    // Walking: forward a little faster than back, guarded or
+                    // crouched slowly; the dash covers distance.
+                    f.x += movement
+                        * if f.guard || f.crouch {
+                            12
+                        } else if movement == f.facing {
+                            WALK_FORWARD
+                        } else {
+                            WALK_BACK
+                        };
                 }
                 if buffered & JUMP != 0 && f.y == 0 {
                     f.vy = 112;
@@ -1071,7 +1083,7 @@ mod tests {
     #[test]
     fn every_room_is_reachable_without_breaking_anything() {
         let mut m = duel();
-        run(&mut m, [LEFT, RIGHT], 500);
+        run(&mut m, [LEFT, RIGHT], 600);
         assert_eq!(m.fighters[0].x, -ARENA_LIMIT);
         assert_eq!(m.fighters[1].x, ARENA_LIMIT);
         assert!(m.objects.iter().zip(room::LAYOUT).all(|(o, d)| o.hp == d.hp));
@@ -1231,7 +1243,7 @@ mod tests {
         let mut m = duel();
         run(&mut m, [RIGHT, LEFT], 500);
         assert!(m.fighters[1].x - m.fighters[0].x >= 600);
-        run(&mut m, [LEFT, RIGHT], 500);
+        run(&mut m, [LEFT, RIGHT], 600);
         assert_eq!(m.fighters[0].x, -ARENA_LIMIT);
         assert_eq!(m.fighters[1].x, ARENA_LIMIT);
     }

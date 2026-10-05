@@ -13,6 +13,7 @@ pub mod fight;
 pub mod anims;
 pub mod body;
 pub mod effects;
+pub mod feet;
 pub mod fighter_model;
 pub mod mocap;
 pub mod ragdoll;

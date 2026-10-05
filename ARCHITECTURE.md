@@ -53,6 +53,7 @@ Principles:
 | `src/game/mocap.rs` | Fight pack format `PFP1` (body bones, i16 quats, 30 fps), sampling, `Marks`/`strike_marks`, `strike_limb`. |
 | `src/game/anims.rs`, `body.rs` | Authored key-pose animation + IK body solver: the fallback when a pack lacks a take. |
 | `src/game/ragdoll.rs` | Physical layer over the animated pose: 18 joint particles (hips pinned to the animation, the rest damped springs around it), blows push the struck part, root acceleration is felt as inertia, loose parts sag, bone lengths and the floor are kept; bones are turned to follow. `Drive` per state: full control normally, loose limbs in flight and knockdowns, limp after a KO. Cosmetic. |
+| `src/game/feet.rs` | Planted feet: while standing, guarding, crouching or walking each foot stays where it was put; when the body has moved on, it takes a short arcing step (one foot at a time, the leading one first) to where it belongs; two-bone IK with the animated knee plane, the hips sink so both legs reach. No foot slides. Cosmetic. |
 | `src/game/arena_props.rs` | The room: baked apartment from `assets/room.glb` (pieces `oNN_kkk` belong to combat room object NN; `glassNN_kkk` panes; `s_*` fixed) or a box-room fallback; deterministic debris from snapshot ticks. |
 | `src/game/timeline.rs`, `effects.rs`, `camera.rs` | Interpolation of snapshots, particles/sparks, camera. |
 | `src/game/scenery.rs` | Pictures from the page in the room: the night city behind the windows (two layers at different depths → parallax; a dark mask continues the back wall so the city shows only in the openings) and the photos on the TV, the laptop (follows the broken desk piece) and the two bedroom canvases. Screen rectangles were measured in Blender on the built room. |
@@ -139,6 +140,11 @@ Principles:
   `push_bodies` maps each event to a body part and a push (jab: head back,
   hook: head sideways, uppercut: head up, kicks: the gut, lows: the legs, a
   block: the forearms, a parry: the attacker's arms). Off in preview mode.
+  Inertia comes from the authoritative velocity (`f.vx`, `f.vy`, filtered
+  40 ms), never from rendered positions, so uneven frames do not shake it.
+- Walking: the captured walk cycles are no longer blended in (they slid at
+  any speed but their own); `feet.rs` steps instead. Walk speed 26 mm/tick
+  forward, 22 back, 12 guarded or crouched (`combat` `WALK_FORWARD/BACK`).
 - Baked room: `tools/room/apartment.py` authors five open furnished rooms;
   `build_room.py` supplies Blender import/material/preview helpers. CC0 Poly Haven
   assets and seamless architectural surfaces, with 22 additional model types.
@@ -272,7 +278,7 @@ npm ci
 python tools/fetch-assets.py                 # models + packs (not in git)
 .\build-web.ps1                              # -> dist/ (both wasm + web + assets)
 .\build-web.ps1 -Serve                       # + local dev server on :8080 (guest identities)
-cargo test --offline --lib                   # engine/game: 63 tests
+cargo test --offline --lib                   # engine/game: 65 tests
 cargo test --offline --manifest-path combat/Cargo.toml   # combat: 35 tests
 npm test                                     # server: 15 tests (node:test)
 npm run test:browser; npm run test:combat; npm run test:physics   # Playwright, need dist/

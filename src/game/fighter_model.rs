@@ -9,6 +9,7 @@ use super::{
     anims::{self, Library, Reaction},
     body::{BodyPose, BodyRig, LEAD, REAR},
     dancer::Character,
+    feet::Feet,
     mocap::{strike_limb, strike_marks, Marks, MocapLib},
     ragdoll::{Drive, Part, Ragdoll, RagdollRig},
     timeline::Body,
@@ -255,6 +256,8 @@ struct Side {
     block_clock: f32,
     /// Physical secondary motion over the animated pose.
     ragdoll: Ragdoll,
+    /// Feet planted on the floor while standing and walking.
+    feet: Feet,
     /// Room directions into this body's space (placement without the origin).
     to_body: Mat4,
     /// Dancing: which take of `DANCES` plays, since when (clip time), and
@@ -293,6 +296,7 @@ impl Side {
             block_total: 0.0,
             block_clock: f32::MAX,
             ragdoll: Ragdoll::default(),
+            feet: Feet::default(),
             to_body: Mat4::IDENTITY,
             dance: 0,
             dance_start: 0.0,
@@ -1305,9 +1309,10 @@ impl FighterModel {
                 self.pose.locals.clear();
                 self.pose.locals.extend(av.character.skeleton.bones.iter().map(|b| b.bind_local));
                 captured.lib.sample(clip_index, t, root_model, &mut self.pose);
-                // Stance breathes into the walk cycle as the fighter moves.
+                // Stance breathes into the walk cycle as the fighter moves
+                // (a rig with planted feet steps by itself instead).
                 let crouched = matches!(clip, Clip::Crouch | Clip::CrouchGuard);
-                if matches!(clip, Clip::Idle | Clip::Guard) || crouched {
+                if (matches!(clip, Clip::Idle | Clip::Guard) || crouched) && av.ragdoll.is_none() {
                     let key = match (crouched, moved >= 0.0) {
                         (false, true) => "walk_fwd",
                         (false, false) => "walk_back",
@@ -1429,14 +1434,36 @@ impl FighterModel {
                     }
                 }
             }
-            s.out_locals.clone_from(&self.pose);
             let turn = s.turn * s.turn * (3.0 - 2.0 * s.turn);
             let yaw = (std::f32::consts::FRAC_PI_2 - CAMERA_TURN) * (1.0 - turn) + DANCE_YAW * turn;
             let flip = if mirrored { -1.0 } else { 1.0 };
-            // Physical layer: hits, inertia, gravity on a loose body.
-            s.to_body = (Mat4::from_trs(Vec3::ZERO, Quat::IDENTITY, vec3(flip, 1.0, 1.0))
-                * Mat4::from_trs(Vec3::ZERO, Quat::from_axis_angle(Vec3::Y, yaw), vec3(1.0, 1.0, 1.0)))
-            .invert();
+            let rotation = Mat4::from_trs(Vec3::ZERO, Quat::IDENTITY, vec3(flip, 1.0, 1.0))
+                * Mat4::from_trs(Vec3::ZERO, Quat::from_axis_angle(Vec3::Y, yaw), vec3(1.0, 1.0, 1.0));
+            s.to_body = rotation.invert();
+            // Feet planted on the floor while standing and walking.
+            let standing = grounded_neutral && captured_pose.is_some();
+            match (&av.ragdoll, view.preview) {
+                (Some(rig), false) => s.feet.apply(
+                    av.hips,
+                    [rig.leg(0), rig.leg(1)],
+                    &av.character.skeleton,
+                    &mut self.pose,
+                    &mut self.globals[side],
+                    av.character.transform,
+                    Mat4::translation(root) * rotation,
+                    standing,
+                    dt,
+                ),
+                _ => s.feet.reset(),
+            }
+            s.out_locals.clone_from(&self.pose);
+            // Physical layer: hits, inertia, gravity on a loose body. The
+            // root's velocity comes from the simulation (or the knockout
+            // flight), never from rendered positions.
+            let root_velocity = match &s.ko {
+                Some(ko) if clip == Clip::Knockout => vec3(ko.vx, 0.0, 0.0),
+                _ => vec3(f.vx as f32, f.vy as f32, 0.0) * 0.06,
+            };
             match (&av.ragdoll, view.preview) {
                 (Some(rig), false) => s.ragdoll.apply(
                     rig,
@@ -1446,6 +1473,7 @@ impl FighterModel {
                     av.character.transform,
                     s.to_body,
                     root,
+                    root_velocity,
                     drive(clip, frame),
                     dt,
                 ),
@@ -1465,9 +1493,9 @@ impl FighterModel {
 /// limbs, a knockdown falls loose and takes control back for the get-up, a
 /// knocked out body goes limp.
 fn drive(clip: Clip, frame: f32) -> Drive {
-    const FLIGHT: Drive = Drive { torso: 0.5, head: 0.3, arms: 0.18, legs: 0.25 };
-    const FALL: Drive = Drive { torso: 0.4, head: 0.25, arms: 0.12, legs: 0.15 };
-    const LIMP: Drive = Drive { torso: 0.25, head: 0.12, arms: 0.05, legs: 0.08 };
+    const FLIGHT: Drive = Drive { torso: 0.5, head: 0.3, arms: 0.18, legs: 0.25, inertia: 1.0 };
+    const FALL: Drive = Drive { torso: 0.4, head: 0.25, arms: 0.12, legs: 0.15, inertia: 1.0 };
+    const LIMP: Drive = Drive { torso: 0.25, head: 0.12, arms: 0.05, legs: 0.08, inertia: 1.0 };
     match clip {
         Clip::AirHit => FLIGHT,
         Clip::Down(_) => FALL.lerp(Drive::FULL, ((frame - DOWN_FALL) / 10.0).clamp(0.0, 1.0)),

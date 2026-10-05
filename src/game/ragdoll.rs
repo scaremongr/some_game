@@ -11,6 +11,10 @@
 //! Cosmetic and client side only, like the debris.
 use crate::engine::{math3::*, skeleton::{Pose, Skeleton}};
 
+/// The simulation's gravity (5 mm/tick²): a body in free fall is weightless
+/// relative to its root, as it should be.
+const GRAVITY: f32 = 18.0;
+
 const HIPS: usize = 0;
 const SPINE: usize = 1;
 const CHEST: usize = 2;
@@ -103,16 +107,19 @@ impl Part {
     }
 }
 
-/// How much the body is in control of each region (multiplies `RATE`).
+/// How much the body is in control of each region (multiplies `RATE`), and
+/// how much of the root's change of speed it feels (its own jumps and steps
+/// barely shake it; a launched or knocked out body feels all of it).
 #[derive(Clone, Copy, Debug)]
 pub struct Drive {
     pub torso: f32,
     pub head: f32,
     pub arms: f32,
     pub legs: f32,
+    pub inertia: f32,
 }
 impl Drive {
-    pub const FULL: Drive = Drive { torso: 1.0, head: 1.0, arms: 1.0, legs: 1.0 };
+    pub const FULL: Drive = Drive { torso: 1.0, head: 1.0, arms: 1.0, legs: 1.0, inertia: 0.25 };
     fn of(self, i: usize) -> f32 {
         match i {
             SPINE | CHEST => self.torso,
@@ -123,7 +130,13 @@ impl Drive {
     }
     pub fn lerp(self, o: Drive, t: f32) -> Drive {
         let l = |a: f32, b: f32| a + (b - a) * t;
-        Drive { torso: l(self.torso, o.torso), head: l(self.head, o.head), arms: l(self.arms, o.arms), legs: l(self.legs, o.legs) }
+        Drive {
+            torso: l(self.torso, o.torso),
+            head: l(self.head, o.head),
+            arms: l(self.arms, o.arms),
+            legs: l(self.legs, o.legs),
+            inertia: l(self.inertia, o.inertia),
+        }
     }
 }
 
@@ -132,6 +145,14 @@ pub struct RagdollRig {
     bones: [usize; N],
 }
 impl RagdollRig {
+    /// Hip, knee and ankle bones of the left (0) or right (1) leg.
+    pub fn leg(&self, side: usize) -> [usize; 3] {
+        if side == 0 {
+            [self.bones[L_UPLEG], self.bones[L_LEG], self.bones[L_FOOT]]
+        } else {
+            [self.bones[R_UPLEG], self.bones[R_LEG], self.bones[R_FOOT]]
+        }
+    }
     pub fn new(skeleton: &Skeleton) -> Option<RagdollRig> {
         let find = |names: &[&str]| {
             names
@@ -212,9 +233,11 @@ impl Ragdoll {
     }
 
     /// Advances the body by `dt` and turns the bones of `pose` to follow it.
-    /// `root` is the placement origin in the room (its motion is felt as
-    /// inertia), `to_body` turns room directions into body space and
-    /// `body` maps the model space of `skeleton` into body space.
+    /// `root` is the placement origin in the room and `root_velocity` its
+    /// authoritative velocity (m/s, from the simulation, not from rendered
+    /// positions: uneven frames would shake the body); a change of it is felt
+    /// as inertia. `to_body` turns room directions into body space and `body`
+    /// maps the model space of `skeleton` into body space.
     #[allow(clippy::too_many_arguments)]
     pub fn apply(
         &mut self,
@@ -225,6 +248,7 @@ impl Ragdoll {
         body: Mat4,
         to_body: Mat4,
         root: Vec3,
+        root_velocity: Vec3,
         drive: Drive,
         dt: f32,
     ) {
@@ -241,19 +265,20 @@ impl Ragdoll {
         let head_inverse = (body * globals[rig.bones[HEAD]]).invert();
         let tip_local = head_inverse.transform_point(target[TIP]);
 
-        // Root motion, smoothed (snapshots arrive in steps), felt as inertia.
-        let jumped = (root - self.root).length() > 0.8;
-        if !self.ready || jumped || dt <= 0.0 {
-            *self = Ragdoll { ready: true, root, ..Ragdoll::default() };
+        // A teleport (a new round) starts over; otherwise a change of the
+        // root's speed is felt as a kick the other way.
+        if !self.ready || (root - self.root).length() > 0.8 {
+            *self = Ragdoll { ready: true, root, root_velocity, ..Ragdoll::default() };
             return;
         }
-        let measured = (root - self.root) * (1.0 / dt);
+        // Snapshots change the velocity in steps (20 Hz online): a 40 ms
+        // filter turns them into ramps, a blow still lands as a jolt.
         let previous = self.root_velocity;
-        self.root_velocity = previous + (measured - previous) * (1.0 - (-dt / 0.05).exp());
+        self.root_velocity = previous + (root_velocity - previous) * (1.0 - (-dt / 0.04).exp());
+        let kick = to_body.transform_direction(previous - self.root_velocity) * drive.inertia;
         self.root = root;
-        let mut accel = to_body.transform_direction((self.root_velocity - previous) * (1.0 / dt));
-        if accel.length() > 60.0 {
-            accel = accel.normalize() * 60.0;
+        for v in &mut self.velocity[1..] {
+            *v += kick;
         }
         let floor = -root.y;
 
@@ -261,8 +286,8 @@ impl Ragdoll {
         for (k, &(a, b)) in LINKS.iter().enumerate() {
             rest[k] = (target[a] - target[b]).length();
         }
-        let steps = (dt * 120.0).ceil().clamp(1.0, 6.0) as usize;
-        let h = dt / steps as f32;
+        let steps = if dt > 0.0 { (dt * 120.0).ceil().clamp(1.0, 6.0) as usize } else { 0 };
+        let h = dt / steps.max(1) as f32;
         for _ in 0..steps {
             let mut p = [Vec3::ZERO; N];
             for i in 0..N {
@@ -270,9 +295,12 @@ impl Ragdoll {
                     p[i] = target[i];
                     continue;
                 }
-                let w = (RATE[i] * drive.of(i) * (1.0 - 0.85 * self.shock[i])).max(0.5);
-                let sag = 1.0 - (w / 25.0).min(1.0);
-                let force = self.offset[i] * (-w * w) - self.velocity[i] * (1.6 * w) + vec3(0.0, -9.8 * sag, 0.0) - accel;
+                // Control: 1 when the body holds this part, less when it is
+                // loose (by state or a recent blow). Only loose parts sag.
+                let control = (drive.of(i) * (1.0 - 0.85 * self.shock[i])).clamp(0.0, 1.0);
+                let w = (RATE[i] * control).max(0.5);
+                let sag = 1.0 - control;
+                let force = self.offset[i] * (-w * w) - self.velocity[i] * (1.6 * w) + vec3(0.0, -GRAVITY * sag, 0.0);
                 self.velocity[i] += force * h;
                 p[i] = target[i] + self.offset[i] + self.velocity[i] * h;
             }
@@ -311,7 +339,8 @@ impl Ragdoll {
         for s in &mut self.shock {
             *s = (*s - dt * 3.0).max(0.0);
         }
-        if self.offset.iter().all(|o| o.length() < 0.003) {
+        // Sub-millimetre: the animation as is (no visible switch).
+        if self.offset.iter().all(|o| o.length() < 0.0005) {
             return;
         }
 
@@ -319,11 +348,7 @@ impl Ragdoll {
         let p: [Vec3; N] = std::array::from_fn(|i| target[i] + self.offset[i]);
         let to_model = body.invert();
         let turn = |bone: usize, rotation: Quat, at: Vec3, pose: &mut Pose, globals: &mut Vec<Mat4>| {
-            let delta = to_model * Mat4::translation(at) * Mat4::from_trs(Vec3::ZERO, rotation, vec3(1.0, 1.0, 1.0)) * Mat4::translation(at * -1.0) * body;
-            let global = delta * globals[bone];
-            let parent = skeleton.bones[bone].parent.map_or(Mat4::IDENTITY, |b| globals[b]);
-            pose.locals[bone].rotation = Quat::from_matrix(parent.invert() * global);
-            skeleton.global_matrices(pose, globals);
+            turn_bone(skeleton, pose, globals, body, to_model, bone, rotation, at);
         };
         // The spine: towards the neck, shoulders level with the particles.
         {
@@ -359,6 +384,31 @@ impl Ragdoll {
     }
 }
 
+/// Turns `bone` by `rotation` about the point `at` (both in body space;
+/// `body` maps model space there, `to_model` back) and refreshes the global
+/// matrices.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn turn_bone(
+    skeleton: &Skeleton,
+    pose: &mut Pose,
+    globals: &mut Vec<Mat4>,
+    body: Mat4,
+    to_model: Mat4,
+    bone: usize,
+    rotation: Quat,
+    at: Vec3,
+) {
+    let delta = to_model
+        * Mat4::translation(at)
+        * Mat4::from_trs(Vec3::ZERO, rotation, vec3(1.0, 1.0, 1.0))
+        * Mat4::translation(at * -1.0)
+        * body;
+    let global = delta * globals[bone];
+    let parent = skeleton.bones[bone].parent.map_or(Mat4::IDENTITY, |b| globals[b]);
+    pose.locals[bone].rotation = Quat::from_matrix(parent.invert() * global);
+    skeleton.global_matrices(pose, globals);
+}
+
 /// The rotation taking direction `a` (with `a_side` across it) onto `b`
 /// (with `b_side`).
 fn align(a: Vec3, a_side: Vec3, b: Vec3, b_side: Vec3) -> Quat {
@@ -391,7 +441,7 @@ mod tests {
         let mut globals = Vec::new();
         let mut doll = Ragdoll::default();
         for _ in 0..30 {
-            doll.apply(&rig, &c.skeleton, &mut pose, &mut globals, c.transform, Mat4::IDENTITY, Vec3::ZERO, Drive::FULL, 1.0 / 60.0);
+            doll.apply(&rig, &c.skeleton, &mut pose, &mut globals, c.transform, Mat4::IDENTITY, Vec3::ZERO, Vec3::ZERO, Drive::FULL, 1.0 / 60.0);
         }
         let rest = c.skeleton.rest_pose();
         for (a, b) in pose.locals.iter().zip(&rest.locals) {
@@ -410,20 +460,20 @@ mod tests {
             c.transform.transform_point(globals[rig.bones[HEAD]].transform_point(Vec3::ZERO))
         };
         let mut pose = rest.clone();
-        doll.apply(&rig, &c.skeleton, &mut pose, &mut globals, c.transform, Mat4::IDENTITY, Vec3::ZERO, Drive::FULL, 1.0 / 60.0);
+        doll.apply(&rig, &c.skeleton, &mut pose, &mut globals, c.transform, Mat4::IDENTITY, Vec3::ZERO, Vec3::ZERO, Drive::FULL, 1.0 / 60.0);
         let still = head(&rest, &mut globals);
         doll.push(Part::Head, vec3(0.0, 0.0, -3.0));
         let mut furthest: f32 = 0.0;
         for frame in 0..90 {
             let mut pose = rest.clone();
-            doll.apply(&rig, &c.skeleton, &mut pose, &mut globals, c.transform, Mat4::IDENTITY, Vec3::ZERO, Drive::FULL, 1.0 / 60.0);
+            doll.apply(&rig, &c.skeleton, &mut pose, &mut globals, c.transform, Mat4::IDENTITY, Vec3::ZERO, Vec3::ZERO, Drive::FULL, 1.0 / 60.0);
             let moved = (head(&pose, &mut globals) - still).length();
             furthest = furthest.max(moved);
             assert!(pose.locals.iter().all(|l| l.rotation.x.is_finite()), "frame {frame}");
         }
         assert!(furthest > 0.05, "the head barely moved: {furthest}");
         let mut pose = rest.clone();
-        doll.apply(&rig, &c.skeleton, &mut pose, &mut globals, c.transform, Mat4::IDENTITY, Vec3::ZERO, Drive::FULL, 1.0 / 60.0);
+        doll.apply(&rig, &c.skeleton, &mut pose, &mut globals, c.transform, Mat4::IDENTITY, Vec3::ZERO, Vec3::ZERO, Drive::FULL, 1.0 / 60.0);
         assert!((head(&pose, &mut globals) - still).length() < 0.01, "the head came back");
     }
 
@@ -433,12 +483,12 @@ mod tests {
         let rest = c.skeleton.rest_pose();
         let mut globals = Vec::new();
         let mut doll = Ragdoll::default();
-        let limp = Drive { torso: 0.2, head: 0.1, arms: 0.05, legs: 0.05 };
+        let limp = Drive { torso: 0.2, head: 0.1, arms: 0.05, legs: 0.05, inertia: 1.0 };
         // The body space floor sits 0.9 m below the root.
         let root = vec3(0.0, 0.0, 0.0);
         for _ in 0..240 {
             let mut pose = rest.clone();
-            doll.apply(&rig, &c.skeleton, &mut pose, &mut globals, c.transform, Mat4::IDENTITY, root, limp, 1.0 / 60.0);
+            doll.apply(&rig, &c.skeleton, &mut pose, &mut globals, c.transform, Mat4::IDENTITY, root, Vec3::ZERO, limp, 1.0 / 60.0);
             c.skeleton.global_matrices(&pose, &mut globals);
             for &bone in &rig.bones[1..] {
                 let y = c.transform.transform_point(globals[bone].transform_point(Vec3::ZERO)).y;
