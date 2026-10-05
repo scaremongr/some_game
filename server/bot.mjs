@@ -173,6 +173,18 @@ export function createGameBot({ token, gameUrl, appLink = '', league = null, api
   return {
     secret,
     me,
+    /** The user's profile photo (JPEG, ~320 px) as the bot sees it, or
+     * null: Mini App data only gives an SVG link, which pictures cannot use. */
+    async photo(userId) {
+      const r = await call('getUserProfilePhotos', { user_id: Number(userId), limit: 1 });
+      const sizes = r?.photos?.[0];
+      if (!sizes?.length) return null;
+      const size = sizes.find(s => s.width >= 300) || sizes[sizes.length - 1];
+      const file = await call('getFile', { file_id: size.file_id });
+      if (!file?.file_path) return null;
+      const res = await fetch(`https://api.telegram.org/file/bot${token}/${file.file_path}`, { signal: AbortSignal.timeout(6000) });
+      return res.ok ? Buffer.from(await res.arrayBuffer()) : null;
+    },
     /** Handles one update; resolves when replies are sent. */
     async handle(update) {
       if (update?.callback_query) {

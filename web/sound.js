@@ -6,6 +6,8 @@
 const AC = window.AudioContext || window.webkitAudioContext;
 let ctx = null, master, sfxBus, musicBus, reverb, noise;
 let mode = 'all', wanted = null, track = null, intensity = 0;
+// Mix levels: effects stay present but never harsh; music under them.
+const SFX = 0.5, MUSIC = 0.17;
 
 function init() {
   if (ctx || !AC) return ctx;
@@ -20,7 +22,9 @@ function build() {
   comp.threshold.value = -16; comp.ratio.value = 4; comp.attack.value = 0.004; comp.release.value = 0.2;
   master = ctx.createGain(); master.gain.value = 0.9;
   master.connect(comp); comp.connect(ctx.destination);
-  sfxBus = ctx.createGain(); sfxBus.connect(master);
+  // Effects pass a soft top cut: hits thud rather than crack.
+  const soft = ctx.createBiquadFilter(); soft.type = 'lowpass'; soft.frequency.value = 4200; soft.Q.value = 0.5; soft.connect(master);
+  sfxBus = ctx.createGain(); sfxBus.connect(soft);
   musicBus = ctx.createGain(); musicBus.gain.value = 0; musicBus.connect(master);
   // A short room for the hits and a longer tail for the pads.
   reverb = ctx.createConvolver();
@@ -47,8 +51,8 @@ document.addEventListener('visibilitychange', () => {
 function apply() {
   if (!ctx) return;
   const t = ctx.currentTime;
-  sfxBus.gain.setTargetAtTime(mode === 'off' ? 0 : 0.85, t, 0.05);
-  musicBus.gain.setTargetAtTime(mode === 'all' ? 0.2 : 0, t, 0.4);
+  sfxBus.gain.setTargetAtTime(mode === 'off' ? 0 : SFX, t, 0.05);
+  musicBus.gain.setTargetAtTime(mode === 'all' ? MUSIC : 0, t, 0.4);
   if (mode === 'off') ctx.suspend().catch(() => {}); else if (ctx.state !== 'running' && navigator.userActivation?.hasBeenActive !== false) ctx.resume().catch(() => {});
   if (mode === 'all' && wanted && !track) startTrack(wanted);
 }
@@ -72,22 +76,20 @@ function send(node, amount) { const g = ctx.createGain(); g.gain.value = amount;
 // ---- Effects ---------------------------------------------------------------
 // A body blow: a falling low thump, a slap of filtered noise and a short tail.
 function blow(t, weight, pitch = 1) {
-  const out = gain(sfxBus, 0.55 + weight * 0.45); send(out, 0.18 + weight * 0.12);
-  const body = gain(out); env(body.gain, t, 1, 0.002, 0.12 + weight * 0.22);
-  const o = osc('sine', 150 * pitch, t, t + 0.5, body);
-  o.frequency.exponentialRampToValueAtTime(42 * pitch, t + 0.09 + weight * 0.12);
-  const slap = gain(filter('bandpass', 1400 + 900 * (1 - weight), 0.8, out)); env(slap.gain, t, 0.9, 0.001, 0.035 + weight * 0.05);
-  burst(t, 0.12, slap);
+  // A muffled body blow: a soft-attack low thump and a short dull smack.
+  const out = gain(sfxBus, 0.4 + weight * 0.35); send(out, 0.12 + weight * 0.1);
+  const body = gain(out); env(body.gain, t, 1, 0.006, 0.1 + weight * 0.18);
+  const o = osc('sine', 120 * pitch, t, t + 0.5, body);
+  o.frequency.exponentialRampToValueAtTime(46 * pitch, t + 0.08 + weight * 0.1);
+  const smack = gain(filter('bandpass', 700 + 300 * (1 - weight), 0.7, out)); env(smack.gain, t, 0.55, 0.004, 0.04 + weight * 0.04);
+  burst(t, 0.12, smack, 0.8);
   if (weight > 0.5) {
-    // Heavy: a crack on top and a dull floor rattle.
-    const crack = gain(filter('highpass', 2500, 0.5, out)); env(crack.gain, t, 0.5, 0.001, 0.05);
-    burst(t, 0.08, crack, 1.4);
-    const rumble = gain(filter('lowpass', 220, 0.7, out)); env(rumble.gain, t + 0.01, 0.6 * weight, 0.01, 0.35);
-    burst(t, 0.45, rumble, 0.5);
+    const rumble = gain(filter('lowpass', 200, 0.7, out)); env(rumble.gain, t + 0.01, 0.45 * weight, 0.015, 0.3);
+    burst(t, 0.4, rumble, 0.5);
   }
 }
 function whoosh(t, weight) {
-  const out = gain(sfxBus, 0.45 + weight * 0.4);
+  const out = gain(sfxBus, 0.3 + weight * 0.25);
   const f = filter('bandpass', 500, 1.6, out);
   f.frequency.setValueAtTime(380 + weight * 100, t); f.frequency.exponentialRampToValueAtTime(1500 - weight * 400, t + 0.16 + weight * 0.1);
   const g = gain(f); env(g.gain, t, 1, 0.05 + weight * 0.04, 0.12 + weight * 0.1);
@@ -105,7 +107,7 @@ function parry(t) {
   for (const [f, a] of [[1180, 1], [1867, 0.6], [2643, 0.45], [3912, 0.25]]) {
     const g = gain(out); env(g.gain, t, a, 0.002, 0.55); osc('sine', f, t, t + 0.7, g);
   }
-  const tick = gain(filter('highpass', 3000, 0.5, out)); env(tick.gain, t, 0.6, 0.001, 0.03); burst(t, 0.05, tick);
+  const tick = gain(filter('bandpass', 2400, 0.8, out)); env(tick.gain, t, 0.3, 0.003, 0.03); burst(t, 0.05, tick);
 }
 function shatterGuard(t) {
   blow(t, 0.7, 1.2);
@@ -171,7 +173,7 @@ function click(t) { const g = gain(sfxBus); env(g.gain, t, 0.06, 0.001, 0.03); o
 // Music steps back for a moment under a big blow.
 function duck(t, depth, len) {
   if (!musicBus || mode !== 'all') return;
-  const p = musicBus.gain; p.cancelScheduledValues(t); p.setValueAtTime(0.2 * depth, t); p.linearRampToValueAtTime(0.2, t + len);
+  const p = musicBus.gain; p.cancelScheduledValues(t); p.setValueAtTime(MUSIC * depth, t); p.linearRampToValueAtTime(MUSIC, t + len);
 }
 
 const effects = { blow, whoosh, block, parry, shatterGuard, slam, grab, crash, knockout, beep, bell, jingle, click };
@@ -234,6 +236,26 @@ function keys(t, notes, len, level = 0.07) {
   for (const m of notes) { osc('sine', hz(m), t, t + len, g); const h = gain(g, 0.18); osc('sine', hz(m + 12), t, t + len, h); }
 }
 
+function stab(t, notes, len, cutoff = 2600, level = 0.06) {
+  // A bright chord hit: two detuned saws per note through a closing filter.
+  const f = filter('lowpass', cutoff, 1.5, musicBus); f.frequency.setValueAtTime(cutoff * 1.6, t); f.frequency.exponentialRampToValueAtTime(cutoff * 0.5, t + len);
+  send(f, 0.2);
+  const g = gain(f); env(g.gain, t, level, 0.004, len);
+  for (const m of notes) for (const d of [-9, 9]) { const o = osc('sawtooth', hz(m), t, t + len + 0.05, g); o.detune.value = d; }
+}
+function lead(t, m, len, level = 0.06) {
+  // A square lead with a little vibrato and echo.
+  const f = filter('lowpass', 3200, 0.8, musicBus); send(f, 0.3);
+  const g = gain(f); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(level, t + 0.01); g.gain.setValueAtTime(level * 0.8, t + len * 0.7); g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+  const o = osc('square', hz(m), t, t + len, g);
+  const vib = ctx.createOscillator(), depth = ctx.createGain(); vib.frequency.value = 6; depth.gain.value = 8;
+  vib.connect(depth); depth.connect(o.detune); vib.start(t + 0.08); vib.stop(t + len);
+}
+function clap(t, v = 1) {
+  const g = gain(filter('bandpass', 1500, 0.9, musicBus)); send(g, 0.3);
+  for (const d of [0, 0.011, 0.022]) { const e = gain(g); env(e.gain, t + d, 0.5 * v, 0.001, d === 0.022 ? 0.14 : 0.01); burst(t + d, 0.16, e); }
+}
+
 // Tracks: tempo, bars of chords, and a function that schedules one step.
 const TRACKS = {
   // Lobby: lo-fi rooftops at night. Fmaj7 Em7 Dm9 Cmaj7, swung hats.
@@ -252,33 +274,37 @@ const TRACKS = {
       if (bar % 4 === 3 && s === 14) pluck(t, chord[3] + 12, 0.8, 'triangle');
     },
   },
-  // Fight 1: night drive. Am F C G, octave bass, arp in the second half.
-  night: {
-    bpm: 112, swing: 0,
-    chords: [[57, 60, 64], [53, 57, 60], [48, 52, 55], [55, 59, 62]],
+  // Fight 1: arcade rock. A G D A, driving bass, power stabs, a riff.
+  arcade: {
+    bpm: 138, swing: 0,
+    chords: [[45, 52, 57], [43, 50, 55], [38, 45, 50], [45, 52, 57]],
+    riff: [{ 0: 76, 2: 78, 4: 81, 7: 78, 8: 76, 10: 73, 12: 76, 14: 74 }, { 0: 73, 2: 71, 4: 69, 8: 71, 10: 73, 12: 76 }],
     step(t, s, bar, chord, dur, heat) {
-      const root = chord[0] - 24;
-      if (s % 4 === 0) kick(t);
-      if (s === 4 || s === 12) snare(t);
-      if (s % 2 === 1 || heat > 0.5) hat(t, s % 2 ? 0.8 : 0.4, s % 4 === 2);
-      if (s % 2 === 0) bass(t, root + (s % 4 === 2 ? 12 : 0), dur * 1.6, 500 + heat * 900);
-      if (s === 0) pad(t, chord.map(m => m + 12), dur * 16, 900 + heat * 800);
-      if (bar % 8 >= 4 || heat > 0.6) { const arp = [0, 1, 2, 1]; pluck(t, chord[arp[s % 4]] + 24, s % 4 === 0 ? 1 : 0.7); }
+      const root = chord[0];
+      if (s % 4 === 0 || (s === 10 && bar % 2)) kick(t);
+      if (s === 4 || s === 12) { snare(t, 1, 200); clap(t, 0.6); }
+      hat(t, s % 4 === 2 ? 0.9 : 0.4, s % 4 === 2);
+      if (heat > 0.5 && s % 2) hat(t, 0.35);
+      if (s % 2 === 0) bass(t, root - 12 + (s === 14 ? 12 : 0), dur * 1.5, 900 + heat * 900, 'sawtooth');
+      if (s === 0) stab(t, [root + 12, root + 19, root + 24], dur * 3, 2400);
+      if (s === 6 || s === 11) stab(t, [root + 12, root + 19, root + 24], dur * 1.5, 2400, 0.045);
+      const n = this.riff[bar % 2][s];
+      if (n && (bar % 8 >= 4 || heat > 0.6)) lead(t, n, dur * 1.8);
     },
   },
-  // Fight 2: pulse. Dm Bb Gm A, syncopated bass, offbeat stabs.
-  pulse: {
-    bpm: 124, swing: 0,
-    chords: [[50, 53, 57], [46, 50, 53], [43, 46, 50], [45, 49, 52]],
+  // Fight 2: electro-funk brawl. Em7 A9 in dorian, slap bass, offbeat stabs.
+  brawl: {
+    bpm: 128, swing: 0.08,
+    chords: [[52, 55, 59, 62], [57, 61, 64, 66], [52, 55, 59, 62], [57, 61, 64, 67]],
     step(t, s, bar, chord, dur, heat) {
       const root = chord[0] - 12;
       if (s % 4 === 0) kick(t);
-      if (s === 14 && bar % 2) kick(t, 0.6);
-      if (s === 4 || s === 12) { snare(t, 0.8, 210); hat(t, 0.5, true); }
-      hat(t, s % 4 === 2 ? 0.9 : 0.35);
-      if ([0, 3, 6, 8, 11, 14].includes(s)) bass(t, root + (s === 14 ? 7 : 0), dur * 1.2, 400 + heat * 1100);
-      if (s % 4 === 2) { const f = filter('lowpass', 1600 + heat * 1500, 1, musicBus); const g = gain(f); env(g.gain, t, 0.05, 0.003, 0.14); for (const m of chord) osc('sawtooth', hz(m + 12), t, t + 0.2, g); }
-      if (bar % 8 >= 4 && [0, 3, 6, 10].includes(s)) pluck(t, chord[[0, 2, 1, 2][[0, 3, 6, 10].indexOf(s)]] + 24, 0.9, 'triangle');
+      if (s === 4 || s === 12) clap(t);
+      hat(t, s % 2 ? 0.5 : 0.8, s % 4 === 2);
+      const line = { 0: 0, 3: 12, 6: 0, 7: 10, 10: 0, 12: 12, 14: 7 };
+      if (s in line) bass(t, root - 12 + line[s], dur * (s === 0 ? 2 : 1), 1100 + heat * 1000, 'square');
+      if (s % 4 === 2) stab(t, chord.map(m => m + 12), dur * 0.9, 3200, 0.05);
+      if (bar % 8 >= 4 || heat > 0.6) { const arp = [0, 2, 3, 1]; pluck(t, chord[arp[s % 4]] + 24, s % 4 === 0 ? 1 : 0.6); }
     },
   },
 };
@@ -301,7 +327,7 @@ function schedule() {
     nextAt += dur; stepIndex++;
   }
 }
-// Which track should play: 'lobby', 'night', 'pulse' or null for silence.
+// Which track should play: 'lobby', 'arcade', 'brawl' or null for silence.
 export function music(name) {
   if (name === wanted && (track || mode !== 'all')) return;
   wanted = name;
@@ -330,7 +356,7 @@ export async function measure(kind, name, opts = {}, seconds = 2) {
   const saved = [ctx, master, sfxBus, musicBus, reverb, noise, mode];
   ctx = new Offline(1, Math.ceil(44100 * seconds), 44100);
   try {
-    build(); mode = 'all'; sfxBus.gain.value = 0.85; musicBus.gain.value = 0.2;
+    build(); mode = 'all'; sfxBus.gain.value = SFX; musicBus.gain.value = MUSIC;
     if (kind === 'music') {
       const t = TRACKS[name], dur = 60 / t.bpm / 4;
       for (let i = 0, at = 0.05; at < seconds; i++, at += dur) t.step(at + (i % 2 ? t.swing * dur : 0), i % 16, Math.floor(i / 16), t.chords[Math.floor(i / 16) % t.chords.length], dur, opts.heat || 0);

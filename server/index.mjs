@@ -57,7 +57,7 @@ export async function createArena(options = {}) {
   // with every player so both sides see them.
   const publicPlayer = s => {
     const card = PROBES.has(s.user.id) ? null : league.card(s.user.id);
-    return { id: s.user.id, name: s.user.name, fighter: s.fighter, avatar: s.user.photo ? `avatar/${s.user.id}.jpg` : null, rating: card?.rating ?? null, league: card?.league ?? null };
+    return { id: s.user.id, name: s.user.name, fighter: s.fighter, avatar: s.user.photo || (bot && !dev) ? `avatar/${s.user.id}.jpg` : null, rating: card?.rating ?? null, league: card?.league ?? null };
   };
   if (bot && !dev) bot.setup().then(failed => { for (const f of failed) console.warn('bot setup', f); });
   if (!dev && (new URL(origin).protocol !== 'https:' || new URL(origin).origin !== origin)) throw Error('PUBLIC_ORIGIN must be an HTTPS origin without a path or trailing slash.');
@@ -68,20 +68,32 @@ export async function createArena(options = {}) {
   const avatars = new Map();
   async function avatarBytes(id) {
     // Live players and anyone on a leaderboard.
+    const known = users.has(id) || !!league.player(id);
     const url = users.get(id)?.user.photo ?? league.player(id)?.photo;
-    if (!url) return null;
-    if (dev && url.startsWith('assets/')) return readFile(resolve(root, url)).catch(() => null);
+    if (!url && !(known && bot && !dev)) return null;
+    if (dev && url?.startsWith('assets/')) return readFile(resolve(root, url)).catch(() => null);
     const cached = avatars.get(id);
-    if (cached && cached.url === url) return cached.bytes;
+    // Misses are remembered for an hour: no Bot API call per page view.
+    if (cached && cached.url === (url || 'bot') && (cached.bytes || Date.now() - cached.at < 3600_000)) return cached.bytes;
+    const remember = bytes => {
+      if (avatars.size > 400) avatars.delete(avatars.keys().next().value);
+      avatars.set(id, { url: url || 'bot', bytes, at: Date.now() });
+      return bytes;
+    };
+    if (!url) {
+      // Telegram gives Mini Apps an SVG link only; the bot reads the JPEG.
+      try {
+        const bytes = await bot.photo(id);
+        return remember(bytes && bytes.length <= 400_000 && bytes[0] === 0xff && bytes[1] === 0xd8 ? bytes : null);
+      } catch { return remember(null); }
+    }
     try {
       const r = await fetch(url, { signal: AbortSignal.timeout(6000) });
       const type = r.headers.get('content-type') || '';
       const bytes = Buffer.from(await r.arrayBuffer());
       // JPEG only: it is what Telegram serves and what the renderer decodes.
       if (!r.ok || !type.includes('jpeg') || bytes.length > 400_000 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
-      if (avatars.size > 400) avatars.delete(avatars.keys().next().value);
-      avatars.set(id, { url, bytes });
-      return bytes;
+      return remember(bytes);
     } catch { return null; }
   }
   // Victory cards: the winner's page draws a JPEG and uploads it with a
@@ -288,7 +300,7 @@ export async function createArena(options = {}) {
           if(room.rematch.size===2)start(room);return;
         }
         if(m.type==='top') {
-          const top=league.top(50).map(p=>({...p,avatar:p.photo?`avatar/${p.id}.jpg`:null}));
+          const top=league.top(50).map(p=>({...p,avatar:p.photo||(bot&&!dev)?`avatar/${p.id}.jpg`:null}));
           send(session,{type:'top',players:top,you:{...league.card(session.user.id),id:session.user.id,name:session.user.name}});return;
         }
         // The player allowed the bot to write (revenge calls reach them).

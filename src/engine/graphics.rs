@@ -439,6 +439,11 @@ impl Graphics {
         )
     }
 
+    /// The baked room's detail atlas (see `Renderer3D::set_detail`).
+    pub fn set_room_detail(&mut self, size: u32, rgba: &[u8]) {
+        self.r3d.set_detail(&mut *self.ctx, size, rgba);
+    }
+
     pub fn delete_texture(&mut self, texture: miniquad::TextureId) {
         self.ctx.delete_texture(texture);
     }

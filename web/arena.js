@@ -359,7 +359,7 @@ function setSound(next, announce = true) {
 }
 function cycleSound() { setSound(SOUND_MODES[(SOUND_MODES.indexOf(sfx.getMode()) + 1) % SOUND_MODES.length]); }
 let matchesPlayed = 0;
-function pickMusic() { sfx.music(fighting() ? (matchesPlayed % 2 ? 'night' : 'pulse') : 'lobby'); }
+function pickMusic() { sfx.music(fighting() ? (matchesPlayed % 2 ? 'brawl' : 'arcade') : 'lobby'); }
 // What the last state sounded like: each new event makes its sound once.
 let heard = null;
 const HEAVY = new Set([2, 9, 10, 12, 13, 14, 18, 19]), MEDIUM = new Set([8, 11, 16, 17]);
@@ -725,6 +725,12 @@ function frame(now) {
 }
 setInterval(() => { if (authenticated) send({ type: 'ping', at: Date.now() }); }, 2000);
 
+const loadErrors = [];
+{
+  const original = console.error.bind(console);
+  console.error = (...args) => { loadErrors.push(args.map(String).join(' ').slice(0, 160)); original(...args); };
+  window.addEventListener('error', e => loadErrors.push(String(e.message).slice(0, 160)));
+}
 try {
   if (tg) {
     tg.ready(); tg.expand(); if (tg.isVersionAtLeast?.('7.7')) tg.disableVerticalSwipes();
@@ -740,15 +746,22 @@ try {
   await loadRoster(); showMe(); showPeople([me, BOT]);
   // Fetch explicitly so missing WASM produces a readable loading error.
   const check = await fetch('some_game.wasm', { method: 'HEAD' }); if (!check.ok) throw Error('Нет 3D-сборки. Запустите build-web.ps1.');
+  // Phones: a lighter room (light maps <= 1024 px) and the same cap as a
+  // safety net; desktops the full-resolution bake.
+  window.arenaTextureCap = touch ? 1024 : 0;
+  const hd = !touch && await fetch('assets/room-hd.glb', { method: 'HEAD' }).then(r => r.ok, () => false);
+  window.arenaRoomUrl = hd ? 'assets/room-hd.glb' : 'assets/room.glb';
   window.load('some_game.wasm');
+  // A load that fails says why (renderer errors land in the console).
+  const why = () => loadErrors.length ? ' Причина: ' + loadErrors[loadErrors.length - 1] : '';
   const started = performance.now(); await new Promise((resolve, reject) => {
     function ready() {
       // The apartment is waited for (up to 25 s) so the box room never flashes.
       const room = window.arenaRoomStatus || 0;
       if (window.wasm_exports && window.arenaModelStatus === 1 && (room !== 0 || performance.now() - started > 25000)) { viewport(); resolve(); }
       else if (window.arenaModelStatus === 1) { text('load-status', 'ОБСТАВЛЯЕМ ПЯТЬ КОМНАТ'); setTimeout(ready, 50); }
-      else if (window.arenaModelStatus === -1) reject(Error('Не удалось загрузить персонажа. Обновите страницу, чтобы повторить.'));
-      else if (performance.now() - started > 45000) reject(Error('Персонаж не загрузился. Проверьте сеть и обновите страницу.'));
+      else if (window.arenaModelStatus === -1) reject(Error('Не удалось загрузить персонажа. Обновите страницу, чтобы повторить.' + why()));
+      else if (performance.now() - started > 45000) reject(Error('Персонаж не загрузился. Проверьте сеть и обновите страницу.' + why()));
       else { if (window.wasm_exports) text('load-status', 'ЗАГРУЖАЕМ ПЕРСОНАЖА · 4,2 МБ'); setTimeout(ready, 50); }
     } ready();
   });

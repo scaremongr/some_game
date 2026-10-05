@@ -84,7 +84,9 @@ Principles:
   `fight_fighters` (model/pack per side from `window.arenaFighters`),
   `fight_avatars` (which sides show the requested body), `fight_room_status`,
   `fight_image_info`/`fight_image_copy` (page pictures for `scenery.rs`: version,
-  size, RGBA pixels per slot). `fight_layout` passes four numbers: the free
+  size, RGBA pixels per slot; slot 6 is the room detail atlas),
+  `fight_room_url` (desktops load `assets/room-hd.glb`, phones `assets/room.glb`),
+  `fight_texture_cap` (phones: room textures above 1024 px halved on load). `fight_layout` passes four numbers: the free
   band top/bottom and left/right (the lobby frames the fighters beside the card).
 - **Smoothness**: rendering is at display rate; `arenaClock` gives a fractional
   tick; online play renders `NET_DELAY = 3.5` ticks behind the newest snapshot
@@ -143,7 +145,15 @@ Principles:
   `bake_room.py` bakes Cycles bounced light, soft shadows and AgX tone into per-room
   atlases. All PBR materials stay in place until every group has been baked.
   Fixed shell/floors never scatter; owned furnishings split into rigid pieces.
-  `pipeline_baked` adds view-dependent glass Fresnel and restrained floor highlights;
+  `pipeline_baked` adds view-dependent glass Fresnel and restrained floor highlights,
+  and multiplies a detail atlas (`assets/room_detail.jpg`, `tools/room/detail.py`:
+  high-pass parquet, stone tiles, carpet pile, plaster from the same CC0
+  textures) projected in world space like the bake's textures, so floors,
+  rugs and walls stay sharp up close. The floor offset (0.119 m) was measured
+  against the bake from a top view; re-measure if `surface()` mapping changes.
+  The bake (`--density 420`) gives close-up groups 2048 px maps →
+  `assets/room-hd.glb`; `python tools/room/mobile.py` derives the phone copy
+  `assets/room.glb` (maps ≤ 1024 px). Both are in git.
   fighters have matching warm/cool lighting and projected shadows.
   Adding furniture: sources, licences and steps in section 12.
 
@@ -217,6 +227,11 @@ Principles:
   messages use `https://t.me/<bot>?startapp=…` links); DMs only to users who
   allowed writing (initData `allows_write_to_pm`, a message to the bot, or
   `WebApp.requestWriteAccess`); 403 marks them unreachable.
+- Avatars: Mini App `initData` carries only an SVG `photo_url`, so
+  `/avatar/<id>.jpg` asks the game bot (`bot.photo`: `getUserProfilePhotos` +
+  `getFile`) for the JPEG; misses are cached for an hour. Without a photo the
+  page draws neutral pictures (a silhouette, a robot for the bot), never the
+  3D fighter's portrait.
 - `auth.mjs`: validates `initData` against both bot tokens (game bot and the
   marketplace bot `@srb_flea_market_bot`, which also opens the game); returns
   `{id, name, photo, dm}`; failures log field names only (never the data).
@@ -493,8 +508,9 @@ Downloaded sources stay out of git (`assets-src/` is ignored); record in the
 6. Preview (seconds, Cycles on GPU):
    `blender -b --factory-startup --python tools/room/build_room.py -- --preview out.png [--view living|kitchen|garden|study|bedroom|overview] [--samples 96]`
    — look at the picture; fix scale, rotation, colour.
-7. Bake (~6-8 min at 128 samples on an RTX 4090; much slower on CPU):
-   `blender -b --factory-startup --python tools/room/bake_room.py -- --out assets/room.glb --samples 128 --density 180`.
+7. Bake (~10 min at 128 samples on an RTX 4090; much slower on CPU):
+   `blender -b --factory-startup --python tools/room/bake_room.py -- --out assets/room-hd.glb --samples 128 --density 420`,
+   then `python tools/room/mobile.py` (writes the phone copy `assets/room.glb`).
 8. Check in game: `.\build-web.ps1`, then a pose sheet or
    `node scripts/fight-video.mjs <dir> moves` (breaks things) and look at the
    frames: nothing in the lane, pieces fly sensibly, no black faces. Run the

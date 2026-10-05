@@ -26,9 +26,11 @@ function draw(img) { const c = canvas(img.naturalWidth, img.naturalHeight); c.ge
 
 // ---- The city ---------------------------------------------------------------
 export async function loadCity() {
-  const [far, near] = await Promise.all([load('assets/backdrop/far.jpg'), load('assets/backdrop/near.png')]);
+  const [far, near, detail] = await Promise.all([load('assets/backdrop/far.jpg'), load('assets/backdrop/near.png'), load('assets/room_detail.jpg')]);
   if (near) put(1, draw(near));
   if (far) put(0, draw(far));
+  // Fine grain of floors, rugs and walls (slot 6).
+  if (detail) put(6, draw(detail));
 }
 
 // ---- People's pictures --------------------------------------------------------
@@ -39,15 +41,31 @@ function cover(g, img, x, y, w, h) {
   const k = Math.max(w / img.width, h / img.height), sw = w / k, sh = h / k;
   g.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, x, y, w, h);
 }
-// A face: the photo, or the fighter's portrait for a bot, or initials.
+// A face: the profile photo, or something neutral — a robot for the bot,
+// a quiet silhouette for a person whose photo Telegram does not give us.
 function face(g, p, img, x, y, w, h) {
   if (img) { cover(g, img, x, y, w, h); return; }
-  const hh = hue(p?.id || p?.name), grad = g.createLinearGradient(x, y, x + w, y + h);
-  grad.addColorStop(0, `hsl(${hh},65%,52%)`); grad.addColorStop(1, `hsl(${hh + 25},60%,30%)`);
+  const grad = g.createLinearGradient(x, y, x, y + h);
+  grad.addColorStop(0, '#2a3a48'); grad.addColorStop(1, '#141d26');
   g.fillStyle = grad; g.fillRect(x, y, w, h);
-  const letters = (p?.name || '?').trim().split(/\s+/).map(s => s[0]).join('').slice(0, 2).toUpperCase();
-  g.fillStyle = '#fff'; g.font = font(800, Math.min(w, h) * 0.42); g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.fillText(letters, x + w / 2, y + h / 2); g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+  const cx = x + w / 2, u = Math.min(w, h);
+  if (p?.bot) {
+    g.fillStyle = '#ff7965'; g.beginPath(); g.roundRect ? g.roundRect(cx - u * 0.26, y + h * 0.32, u * 0.52, u * 0.4, u * 0.1) : g.rect(cx - u * 0.26, y + h * 0.32, u * 0.52, u * 0.4); g.fill();
+    g.fillStyle = '#141d26'; for (const dx of [-0.1, 0.1]) { g.beginPath(); g.arc(cx + dx * u, y + h * 0.32 + u * 0.19, u * 0.065, 0, Math.PI * 2); g.fill(); }
+    g.fillStyle = '#ff7965'; g.fillRect(cx - u * 0.03, y + h * 0.32 - u * 0.12, u * 0.06, u * 0.12);
+    g.fillStyle = '#e9bc73'; g.beginPath(); g.arc(cx, y + h * 0.32 - u * 0.13, u * 0.05, 0, Math.PI * 2); g.fill();
+    return;
+  }
+  g.fillStyle = '#6f8494';
+  g.beginPath(); g.arc(cx, y + h * 0.4, u * 0.18, 0, Math.PI * 2); g.fill();
+  g.beginPath(); g.ellipse(cx, y + h * 0.4 + u * 0.5, u * 0.34, u * 0.27, 0, Math.PI, 0); g.fill();
+}
+// Neutral art for a canvas with no photo: a slice of the night city.
+let city = null;
+function scenery(g, W, H) {
+  if (!city) { g.fillStyle = '#1a2230'; g.fillRect(0, 0, W, H); return; }
+  const sw = city.width * 0.22, sh = Math.min(city.height, sw * H / W);
+  g.drawImage(city, city.width * 0.36, (city.height - sh) * 0.45, sw, sh, 0, 0, W, H);
 }
 function disc(g, p, img, cx, cy, r, ring) {
   g.save(); g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.clip(); face(g, p, img, cx - r, cy - r, r * 2, r * 2); g.restore();
@@ -105,7 +123,7 @@ function laptop(me, mine, fighter) {
 // A canvas on the wall: the photo as an old warm print with a vignette.
 function portrait(p, img, W, H) {
   const c = canvas(W, H), g = c.getContext('2d');
-  face(g, p, img, 0, 0, W, H);
+  if (img) cover(g, img, 0, 0, W, H); else scenery(g, W, H);
   g.globalCompositeOperation = 'color'; g.fillStyle = '#7a5a3a66'; g.fillRect(0, 0, W, H);
   g.globalCompositeOperation = 'multiply'; g.fillStyle = '#f2ddb8'; g.fillRect(0, 0, W, H);
   g.globalCompositeOperation = 'source-over';
@@ -126,19 +144,20 @@ function round(g, W, H, r) {
 // and whether a fight is on. Redrawn only when something visible changes.
 let shown = '';
 export async function showPeople({ people, fighters, side = 0, live = false }) {
-  const pic = (p, f) => p?.bot ? f?.portrait : p?.avatar || null;
+  const pic = p => p?.bot ? null : p?.avatar || null;
   const key = JSON.stringify([people.map(p => [p?.id, p?.name, p?.avatar, p?.bot, p?.rating]), fighters.map(f => f?.id), side, live]);
   if (key === shown) return;
   shown = key;
-  const faces = await Promise.all([0, 1].map(i => load(pic(people[i], fighters[i]))));
+  [city] = await Promise.all([load('assets/backdrop/far.jpg')]);
+  const faces = await Promise.all([0, 1].map(i => load(pic(people[i]))));
   if (key !== shown) return;
   const me = people[side], them = people[1 - side];
   put(2, tv(live ? people : [me, them], live ? faces : [faces[side], faces[1 - side]], side, live));
   put(3, laptop(me, faces[side], fighters[side]));
-  // No photo: the canvas shows the fighter instead of initials.
-  put(4, portrait(me, faces[side] || await load(fighters[side]?.portrait), 512, 380));
+  // The canvases: the player and the opponent; no photo, a city painting.
+  put(4, portrait(me, faces[side], 512, 380));
   // The small frame is an oval.
-  const small = live ? portrait(them, faces[1 - side], 256, 364) : portrait(me, await load(fighters[side]?.portrait), 256, 364);
+  const small = portrait(them, live ? faces[1 - side] : null, 256, 364);
   const g = small.getContext('2d');
   g.globalCompositeOperation = 'destination-in'; g.fillStyle = '#000'; g.beginPath(); g.ellipse(128, 182, 126, 180, 0, 0, Math.PI * 2); g.fill();
   put(5, small);

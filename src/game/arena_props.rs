@@ -284,8 +284,16 @@ impl ArenaProps {
     /// Replaces the box room with the baked apartment. Nodes named
     /// `oNN_kkk` / `glassNN_kkk` are pieces of room object NN (5..19);
     /// everything else is fixed.
-    pub fn set_room(&mut self, bytes: &[u8]) -> Result<usize, String> {
-        let scene = gltf::load_scene(bytes)?;
+    /// `cap` > 0 halves textures until their sides fit (phones).
+    pub fn set_room(&mut self, bytes: &[u8], cap: u32) -> Result<usize, String> {
+        let mut scene = gltf::load_scene(bytes)?;
+        if cap > 0 {
+            for t in &mut scene.textures {
+                while t.width > cap || t.height > cap {
+                    halve(t);
+                }
+            }
+        }
         let mut parts = Vec::new();
         let mut fixed = Vec::new();
         let mut groups: BTreeMap<(usize, bool), Vec<(usize, MeshData)>> = BTreeMap::new();
@@ -637,7 +645,7 @@ mod tests {
     fn baked_room_has_pieces_for_every_breakable_object() {
         let Ok(bytes) = std::fs::read("assets/room.glb") else { return };
         let mut room = ArenaProps::new();
-        let pieces = room.set_room(&bytes).unwrap();
+        let pieces = room.set_room(&bytes, 0).unwrap();
         assert!(pieces > 200, "{pieces} pieces");
         for id in 5..20 {
             assert!(room.parts.iter().any(|p| p.owner == id && p.piece), "owner {id}");
@@ -689,6 +697,22 @@ mod tests {
         assert!(room.parts.iter().all(|p| p.fragment.is_none()));
     }
 }
+/// Box-filters a texture to half its size.
+fn halve(t: &mut TextureData) {
+    let (w, h) = ((t.width / 2).max(1), (t.height / 2).max(1));
+    let src = |x: u32, y: u32, c: usize| t.rgba[((y.min(t.height - 1) * t.width + x.min(t.width - 1)) * 4) as usize + c] as u32;
+    let mut out = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            for c in 0..4 {
+                let sum = src(2 * x, 2 * y, c) + src(2 * x + 1, 2 * y, c) + src(2 * x, 2 * y + 1, c) + src(2 * x + 1, 2 * y + 1, c);
+                out[((y * w + x) * 4) as usize + c] = ((sum + 2) / 4) as u8;
+            }
+        }
+    }
+    *t = TextureData { width: w, height: h, rgba: out };
+}
+
 /// Velocity scale for a broken piece of this size: fist-sized bits fly,
 /// a cabinet side only tips over.
 fn heft(size: Vec3) -> f32 {

@@ -12,8 +12,10 @@ New-Item -ItemType Directory -Force -Path (Join-Path $releaseStage 'dist/assets'
 Copy-Item -LiteralPath (Join-Path $releaseRoot 'dist/assets/character.glb') -Destination (Join-Path $releaseStage 'dist/assets/character.glb')
 $releasePack = Join-Path $releaseRoot 'dist/assets/fight.pack'
 if (Test-Path -LiteralPath $releasePack) { Copy-Item -LiteralPath $releasePack -Destination (Join-Path $releaseStage 'dist/assets/fight.pack') }
-$releaseRoom = Join-Path $releaseRoot 'dist/assets/room.glb'
-if (Test-Path -LiteralPath $releaseRoom) { Copy-Item -LiteralPath $releaseRoom -Destination (Join-Path $releaseStage 'dist/assets/room.glb') }
+foreach ($roomFile in @('room.glb', 'room-hd.glb', 'room_detail.jpg')) {
+    $releaseRoom = Join-Path $releaseRoot "dist/assets/$roomFile"
+    if (Test-Path -LiteralPath $releaseRoom) { Copy-Item -LiteralPath $releaseRoom -Destination (Join-Path $releaseStage "dist/assets/$roomFile") }
+}
 $releaseBot = Join-Path $releaseRoot 'dist/assets/bot'
 if (Test-Path -LiteralPath $releaseBot) { Copy-Item -LiteralPath $releaseBot -Destination (Join-Path $releaseStage 'dist/assets') -Recurse }
 $releaseBackdrop = Join-Path $releaseRoot 'dist/assets/backdrop'

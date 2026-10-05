@@ -35,6 +35,8 @@ TEXTURES = [
     "painted_plaster_wall", "plastered_wall_02", "herringbone_parquet", "wood_floor",
     "brick_wall_02", "blue_painted_planks", "kitchen_wood", "floor_tiles_06", "dark_wood",
     "rough_linen", "fabric_pattern_05", "white_planks_clean", "marble_01",
+    # Detail atlas only (tools/room/detail.py): rug pile.
+    "dirty_carpet",
 ]
 
 

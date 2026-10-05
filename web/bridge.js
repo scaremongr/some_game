@@ -39,6 +39,17 @@ miniquad_add_plugin({name:'pulse-arena',version:1,register_plugin(imports){
     new Uint8Array(wasm_memory.buffer, ptr, fightersBytes.length).set(fightersBytes);
     return fightersBytes.length;
   };
+  // Which baked room to load: window.arenaRoomUrl (HD on desktops).
+  imports.env.fight_room_url = function(ptr, capacity) {
+    const url = window.arenaRoomUrl;
+    if (!url) return 0;
+    const bytes = new TextEncoder().encode(url);
+    if (bytes.length > capacity) return 0;
+    new Uint8Array(wasm_memory.buffer, ptr, bytes.length).set(bytes);
+    return bytes.length;
+  };
+  // Largest room texture side (0: no limit): phones keep GPU memory low.
+  imports.env.fight_texture_cap = () => window.arenaTextureCap || 0;
   // Pictures for the room (web/scenery.js): [version, width, height], then pixels.
   imports.env.fight_image_info = function(slot, ptr) {
     const image = window.arenaImages?.[slot];

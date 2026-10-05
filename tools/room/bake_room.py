@@ -155,13 +155,17 @@ def unwrap(o):
 # City and hidden ceiling faces share small maps; hero surfaces retain detail.
 DETAIL = {"s_city_outside": 0.35}
 LIMIT = {"s_living_floor": 2048, "s_living_shell": 2048}
+# Furniture, shelves and breakable objects are looked at up close: up to
+# 2048 px (phones scale maps above 1024 down on load, see arena_props.rs).
+CLOSE_UP = ("furniture", "sofa", "shelves", "fixtures", "textile")
 
 
 def texture_size(o):
     area = sum(p.area for p in o.data.polygons)
     side = math.sqrt(area) * DENSITY * DETAIL.get(o.name, 1.0)
+    limit = LIMIT.get(o.name, 2048 if o.name.startswith("o") or any(k in o.name for k in CLOSE_UP) else 1024)
     size = 128
-    while size < side and size < LIMIT.get(o.name, 1024):
+    while size < side and size < limit:
         size *= 2
     if o.name in ("s_living_sofa", "s_living_furniture", "s_study_shelves"):
         size = 2048

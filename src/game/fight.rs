@@ -46,6 +46,10 @@ extern "C" {
     fn fight_avatars(mask: i32);
     /// The baked room: 1 shown, -1 unavailable (box room stays).
     fn fight_room_status(status: i32);
+    /// Largest room texture side, 0 for no limit.
+    fn fight_texture_cap() -> i32;
+    /// The baked room to load (UTF-8 path; 0: the default).
+    fn fight_room_url(ptr: *mut u8, capacity: usize) -> usize;
 }
 
 /// The fighter everyone starts with; also the stand-in while others load.
@@ -69,6 +73,19 @@ fn fetch(path: &str) -> Pending {
 }
 
 const FOV: f32 = 0.62;
+
+/// Desktops get the full-resolution room, phones a lighter copy (the page decides).
+fn room_url() -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let mut bytes = [0u8; 256];
+        let n = unsafe { fight_room_url(bytes.as_mut_ptr(), bytes.len()) };
+        if let Some(path) = (n > 0 && n <= bytes.len()).then(|| std::str::from_utf8(&bytes[..n]).ok()).flatten() {
+            return path.to_string();
+        }
+    }
+    "assets/room.glb".to_string()
+}
 
 /// A combat event waiting for the render clock to reach its tick.
 struct Event {
@@ -154,7 +171,7 @@ impl FightScene {
             loading,
             pack,
             avatars: HashMap::new(),
-            room: fetch("assets/room.glb"),
+            room: fetch(&room_url()),
             wanted: [
                 (DEFAULT_MODEL.to_string(), DEFAULT_PACK.to_string()),
                 (DEFAULT_MODEL.to_string(), DEFAULT_PACK.to_string()),
@@ -724,7 +741,11 @@ impl Scene for FightScene {
         self.update_avatars();
         let room = self.room.borrow_mut().take();
         if let Some(result) = room {
-            let status = match result.and_then(|bytes| self.props.set_room(&bytes)) {
+            #[cfg(target_arch = "wasm32")]
+            let cap = unsafe { fight_texture_cap() }.max(0) as u32;
+            #[cfg(not(target_arch = "wasm32"))]
+            let cap = 0;
+            let status = match result.and_then(|bytes| self.props.set_room(&bytes, cap)) {
                 Ok(n) => {
                     eprintln!("Room: {n} breakable pieces");
                     1

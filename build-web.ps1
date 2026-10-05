@@ -34,8 +34,12 @@ try {
         New-Item -ItemType Directory -Force -Path (Join-Path $arenaDist 'assets/backdrop') | Out-Null
         Copy-Item -Path (Join-Path $backdrop '*') -Include '*.jpg', '*.png' -Destination (Join-Path $arenaDist 'assets/backdrop') -Force
     }
-    $room = Join-Path $arenaRoot 'assets/room.glb'
-    if (Test-Path -LiteralPath $room) { Copy-Item -LiteralPath $room -Destination (Join-Path $arenaDist 'assets/room.glb') -Force }
+    # The baked room: room-hd.glb for desktops, room.glb (tools/room/mobile.py)
+    # for phones, and the detail atlas both use (tools/room/detail.py).
+    foreach ($roomFile in @('room.glb', 'room-hd.glb', 'room_detail.jpg')) {
+        $room = Join-Path $arenaRoot "assets/$roomFile"
+        if (Test-Path -LiteralPath $room) { Copy-Item -LiteralPath $room -Destination (Join-Path $arenaDist "assets/$roomFile") -Force }
+    }
     # Fighter roster: roster.json, one model + clip pack + portrait per fighter.
     $fighters = Join-Path $arenaRoot 'assets/fighters'
     if (Test-Path -LiteralPath $fighters) {

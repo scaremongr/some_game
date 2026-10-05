@@ -18,7 +18,10 @@ extern "C" {
 /// Page picture slots (web/scenery.js uses the same numbers).
 pub const CITY_FAR: usize = 0;
 pub const CITY_NEAR: usize = 1;
-const SLOTS: usize = 6;
+/// The room's detail atlas (tools/room/detail.py): handed to the renderer.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+const DETAIL: usize = 6;
+const SLOTS: usize = 7;
 
 /// The city render's view (tools/backdrop/city.py): level, tan of half the
 /// horizontal and vertical field, seen from the usual fight camera.
@@ -103,11 +106,17 @@ impl Scenery {
             if unsafe { fight_image_copy(index as i32, rgba.as_mut_ptr(), rgba.len()) } != rgba.len() {
                 continue;
             }
+            slot.version = info[0];
+            if index == DETAIL {
+                if w == h && w.is_power_of_two() {
+                    g.set_room_detail(w as u32, &rgba);
+                }
+                continue;
+            }
             if let Some(old) = slot.texture.take() {
                 g.delete_texture(old);
             }
             slot.texture = Some(g.upload_rgba(w as u32, h as u32, &rgba));
-            slot.version = info[0];
         }
         #[cfg(not(target_arch = "wasm32"))]
         let _ = g;

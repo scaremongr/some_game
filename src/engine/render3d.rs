@@ -254,6 +254,8 @@ struct Uniforms3 {
     rim_color: [f32; 4],
     /// x — порог отсечения по альфе, остальное про запас.
     material: [f32; 4],
+    /// Baked room: x — the detail atlas is bound (1) or not (0).
+    detail_params: [f32; 4],
     bones: [[f32; 4]; MAX_BONES * 3],
 }
 
@@ -274,11 +276,14 @@ pub struct Renderer3D {
     pipeline_glass: Pipeline,
     /// Flat pictures in the room (screens, canvases): a textured quad,
     /// blended, depth-tested like the room around it.
-    pipeline_sprite: Pipeline,
+    /// None when the device rejects the shader: the room shows without them.
+    pipeline_sprite: Option<Pipeline>,
     /// The city behind the windows: drawn before the room at the far end of
     /// the depth range, never clipped by the far plane.
-    pipeline_backdrop: Pipeline,
+    pipeline_backdrop: Option<Pipeline>,
     sprite_quad: Bindings,
+    /// Fine grain for the baked room (tools/room/detail.py), once loaded.
+    detail: Option<TextureId>,
     /// Заглушка 1x1 для материалов без текстуры: так в шейдере не нужна
     /// ветка «есть текстура / нет текстуры».
     white: TextureId,
@@ -387,7 +392,7 @@ impl Renderer3D {
                     fragment: BAKED_FRAGMENT_SHADER,
                 },
                 ShaderMeta {
-                    images: vec!["base_color".to_string()],
+                    images: vec!["base_color".to_string(), "detail".to_string()],
                     uniforms: UniformBlockLayout {
                         uniforms: uniform_layout(),
                     },
@@ -436,7 +441,8 @@ impl Renderer3D {
                     },
                 },
             )
-            .expect("sprite shader compilation failed");
+            .map_err(|e| eprintln!("sprite shader: {e:?}"))
+            .ok();
         let sprite_attributes = [
             VertexAttribute::new("in_pos", VertexFormat::Float3),
             VertexAttribute::new("in_uv", VertexFormat::Float2),
@@ -446,7 +452,7 @@ impl Renderer3D {
             BlendFactor::Value(BlendValue::SourceAlpha),
             BlendFactor::OneMinusValue(BlendValue::SourceAlpha),
         ));
-        let pipeline_sprite = ctx.new_pipeline(
+        let pipeline_sprite = sprite_shader.map(|sprite_shader| ctx.new_pipeline(
             &[BufferLayout::default()],
             &sprite_attributes,
             sprite_shader,
@@ -457,8 +463,8 @@ impl Renderer3D {
                 color_blend: blend,
                 ..Default::default()
             },
-        );
-        let pipeline_backdrop = ctx.new_pipeline(
+        ));
+        let pipeline_backdrop = sprite_shader.map(|sprite_shader| ctx.new_pipeline(
             &[BufferLayout::default()],
             &sprite_attributes,
             sprite_shader,
@@ -473,7 +479,7 @@ impl Renderer3D {
                 color_blend: blend,
                 ..Default::default()
             },
-        );
+        ));
         // Unit quad: x right, y up, uv from the top-left like an image.
         let quad: [f32; 20] = [
             0.0, 0.0, 0.0, 0.0, 1.0, //
@@ -497,6 +503,7 @@ impl Renderer3D {
             pipeline_sprite,
             pipeline_backdrop,
             sprite_quad,
+            detail: None,
             white,
             // На стеке эта структура — десятки килобайт, что для wasm-потока
             // уже ощутимо.
@@ -510,6 +517,7 @@ impl Renderer3D {
                 fill_color: [0.0; 4],
                 rim_color: [0.0; 4],
                 material: [0.0; 4],
+                detail_params: [0.0; 4],
                 bones: [[0.0; 4]; MAX_BONES * 3],
             }),
         }
@@ -668,9 +676,10 @@ impl Renderer3D {
             ctx.apply_bindings(&Bindings {
                 vertex_buffers: vec![mesh.vertex_buffer],
                 index_buffer: mesh.index_buffer,
-                images: vec![texture],
+                images: vec![texture, self.detail.unwrap_or(self.white)],
             });
             u.material = [lift, if textured { 1.0 } else { 0.0 }, exposure, alpha];
+            u.detail_params = [if self.detail.is_some() { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0];
             ctx.apply_uniforms(UniformsSource::table(&**u));
             ctx.draw(first, count, 1);
         }
@@ -678,6 +687,28 @@ impl Renderer3D {
 }
 
 impl Renderer3D {
+    /// The room's detail atlas: mipmapped (a power-of-two square).
+    pub fn set_detail(&mut self, ctx: &mut dyn RenderingBackend, size: u32, rgba: &[u8]) {
+        let id = ctx.new_texture_from_data_and_format(
+            rgba,
+            TextureParams {
+                format: TextureFormat::RGBA8,
+                wrap: TextureWrap::Clamp,
+                min_filter: FilterMode::Linear,
+                mag_filter: FilterMode::Linear,
+                mipmap_filter: MipmapFilterMode::Linear,
+                width: size,
+                height: size,
+                allocate_mipmaps: true,
+                ..Default::default()
+            },
+        );
+        ctx.texture_generate_mipmaps(id);
+        if let Some(old) = self.detail.replace(id) {
+            ctx.delete_texture(old);
+        }
+    }
+
     /// A picture on a flat quad: `model` maps the unit square (x right, y up)
     /// onto the picture's place; `tint` multiplies colour and alpha. `far`
     /// > 0 draws backdrop: depth pinned at that share of the far end (a
@@ -693,7 +724,8 @@ impl Renderer3D {
         tint: [f32; 4],
         far: f32,
     ) {
-        ctx.apply_pipeline(if far > 0.0 { &self.pipeline_backdrop } else { &self.pipeline_sprite });
+        let Some(pipeline) = (if far > 0.0 { self.pipeline_backdrop } else { self.pipeline_sprite }) else { return };
+        ctx.apply_pipeline(&pipeline);
         self.sprite_quad.images[0] = texture;
         ctx.apply_bindings(&self.sprite_quad);
         let u = SpriteUniforms {
@@ -713,11 +745,12 @@ struct SpriteUniforms {
     params: [f32; 4],
 }
 
+// Each uniform is declared only in the stage that reads it: GLSL ES links
+// fail on phones when one uniform has different precisions in the two stages.
 const SPRITE_VERTEX_SHADER: &str = r#"
 attribute vec3 in_pos;
 attribute vec2 in_uv;
 uniform mat4 mvp;
-uniform vec4 tint;
 uniform vec4 params;
 varying vec2 v_uv;
 void main() {
@@ -747,7 +780,12 @@ void main() {
 /// Untextured pieces (glass) use their linear material colour.
 const BAKED_FRAGMENT_SHADER: &str = r#"
 #ifdef GL_ES
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+// World positions feed millimetre-scale detail coordinates.
+precision highp float;
+#else
 precision mediump float;
+#endif
 #endif
 
 varying vec3 v_normal;
@@ -756,6 +794,8 @@ varying vec3 v_color;
 varying vec2 v_uv;
 
 uniform sampler2D base_color;
+uniform sampler2D detail;
+uniform vec4 detail_params;
 uniform vec4 material;
 uniform vec4 camera_pos;
 uniform vec4 key_dir;
@@ -773,6 +813,28 @@ void main() {
     vec3 n = normalize(v_normal);
     vec3 view = normalize(camera_pos.xyz - v_world);
     float alpha = material.w;
+    // Fine grain the light maps are too coarse for: parquet, stone tiles,
+    // rug pile, wall plaster. Tiles of the detail atlas, world-projected
+    // like the bake's textures (so the patterns line up); 0.5 is neutral.
+    if (detail_params.x > 0.5 && alpha > 0.99 && material.x < 0.01) {
+        vec3 w = v_world;
+        vec2 tile = vec2(-1.0);
+        vec2 uv = vec2(0.0);
+        float k = 0.0;
+        if (n.y > 0.95 && w.y < 0.03) {
+            if (w.y > 0.012) { tile = vec2(0.0, 0.5); uv = w.xz / 0.6; k = 0.95; }
+            else if (w.x < -3.0) { tile = vec2(0.5, 0.0); uv = vec2(w.x - 0.119, -w.z - 0.119) / 2.0; k = 0.85; }
+            else { tile = vec2(0.0, 0.0); uv = vec2(w.x - 0.119, -w.z - 0.119) / 2.0; k = 0.9; }
+        } else if (n.z > 0.9 && w.z < -3.2 && w.y > 0.05) {
+            tile = vec2(0.5, 0.5); uv = vec2(w.x, -w.y) / 2.0; k = 0.6;
+        } else if (abs(n.x) > 0.9 && w.y > 0.05 && (abs(abs(w.x) - 3.0) < 0.2 || abs(abs(w.x) - 8.0) < 0.2 || abs(w.x) > 11.9)) {
+            tile = vec2(0.5, 0.5); uv = vec2(w.z, -w.y) / 2.0; k = 0.6;
+        }
+        if (tile.x >= 0.0) {
+            float d = texture2D(detail, tile + (fract(uv) * 0.998 + 0.001) * 0.5).r * 2.0;
+            c *= mix(1.0, d, k);
+        }
+    }
     if (alpha < 0.99) {
         // Glass reflection grows at grazing angles as the camera follows a fight.
         float fresnel = pow(1.0 - abs(dot(n, view)), 5.0);
@@ -804,6 +866,7 @@ fn uniform_layout() -> Vec<UniformDesc> {
         UniformDesc::new("fill_color", UniformType::Float4),
         UniformDesc::new("rim_color", UniformType::Float4),
         UniformDesc::new("material", UniformType::Float4),
+        UniformDesc::new("detail_params", UniformType::Float4),
         UniformDesc::new("bones", UniformType::Float4).array(MAX_BONES * 3),
     ]
 }
