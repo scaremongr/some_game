@@ -1,6 +1,8 @@
-// Sound for the arena. Effects (hits, blocks, throws, breaking furniture,
-// the round calls) are synthesised with WebAudio from noise and oscillators;
-// the music is recorded tracks (assets/sound, Kevin MacLeod, CC BY 4.0, see
+// Sound for the arena. Contact sounds are recordings (assets/sound/sfx from
+// tools/sfx.py: Kenney "Impact Sounds", CC0) layered over a synthesised low
+// end; the rest (whooshes, parry, round calls) is synthesised with WebAudio
+// from noise and oscillators, as are the hits until the recordings load. The
+// music is recorded tracks (assets/sound, Kevin MacLeod, CC BY 4.0, see
 // CREDITS.md) streamed through the same mixer. Modes: 'all', 'sfx', 'off'.
 const AC = window.AudioContext || window.webkitAudioContext;
 let ctx = null, master, sfxBus, musicBus, reverb, noise;
@@ -17,7 +19,33 @@ function init() {
   try { ctx = new AC({ latencyHint: 'interactive' }); } catch { ctx = new AC(); }
   build();
   apply();
+  loadSamples();
   return ctx;
+}
+// Recorded contact sounds: a few takes per kind, chosen without repeats.
+const SAMPLES = { punch: 5, heavy: 5, block: 3, fall: 3, wood: 3 };
+const samples = {}, lastTake = {};
+function loadSamples() {
+  for (const [kind, count] of Object.entries(SAMPLES)) {
+    samples[kind] = [];
+    for (let i = 0; i < count; i++) {
+      fetch(`assets/sound/sfx/${kind}${i}.wav`).then(r => r.ok ? r.arrayBuffer() : Promise.reject())
+        .then(data => new Promise((ok, fail) => ctx.decodeAudioData(data, ok, fail)))
+        .then(buffer => { samples[kind].push(buffer); }).catch(() => {});
+    }
+  }
+}
+// Plays a take of `kind`; false while none is loaded (the caller synthesises).
+function sample(kind, t, level, rate = 1, room = 0.1) {
+  const takes = samples[kind];
+  if (!takes?.length) return false;
+  let i = Math.floor(Math.random() * takes.length);
+  if (takes.length > 1 && i === lastTake[kind]) i = (i + 1) % takes.length;
+  lastTake[kind] = i;
+  const out = gain(sfxBus, level); send(out, room);
+  const s = ctx.createBufferSource(); s.buffer = takes[i]; s.playbackRate.value = rate * (0.94 + Math.random() * 0.12);
+  s.connect(out); s.start(t);
+  return true;
 }
 // The mixing desk on the current context: buses, compressor, room, noise.
 function build() {
@@ -89,6 +117,14 @@ function send(node, amount) { const g = ctx.createGain(); g.gain.value = amount;
 // ---- Effects ---------------------------------------------------------------
 // A body blow: a falling low thump, a slap of filtered noise and a short tail.
 function blow(t, weight, pitch = 1) {
+  // The recorded punch carries the contact; the synthesised thump under it
+  // gives the weight.
+  if (sample(weight > 0.6 ? 'heavy' : 'punch', t, 1.2 + weight * 0.8, pitch, 0.08 + weight * 0.08)) {
+    const out = gain(sfxBus, 0.25 + weight * 0.35);
+    const body = gain(out); env(body.gain, t, 1, 0.004, 0.08 + weight * 0.16);
+    osc('sine', 110 * pitch, t, t + 0.4, body).frequency.exponentialRampToValueAtTime(42 * pitch, t + 0.07 + weight * 0.1);
+    return;
+  }
   // A muffled body blow: a soft-attack low thump and a short dull smack.
   const out = gain(sfxBus, 0.4 + weight * 0.35); send(out, 0.12 + weight * 0.1);
   const body = gain(out); env(body.gain, t, 1, 0.006, 0.1 + weight * 0.18);
@@ -109,7 +145,8 @@ function whoosh(t, weight) {
   burst(t, 0.35, g);
 }
 function block(t) {
-  const out = gain(sfxBus, 0.55); send(out, 0.15);
+  const recorded = sample('block', t, 1.1, 0.9, 0.12);
+  const out = gain(sfxBus, recorded ? 0.3 : 0.55); send(out, 0.15);
   const knock = gain(out); env(knock.gain, t, 0.8, 0.002, 0.09);
   osc('triangle', 210, t, t + 0.15, knock).frequency.exponentialRampToValueAtTime(120, t + 0.08);
   const pad = gain(filter('bandpass', 650, 1.2, out)); env(pad.gain, t, 0.8, 0.001, 0.07);
@@ -129,6 +166,7 @@ function shatterGuard(t) {
   const o = osc('sawtooth', 700, t, t + 0.5, filter('lowpass', 1800, 2, g)); o.frequency.exponentialRampToValueAtTime(140, t + 0.4);
 }
 function slam(t) {
+  sample('fall', t, 1.6, 1, 0.2);
   const out = gain(sfxBus, 1.0); send(out, 0.3);
   const boom = gain(out); env(boom.gain, t, 1, 0.003, 0.5);
   osc('sine', 95, t, t + 0.7, boom).frequency.exponentialRampToValueAtTime(30, t + 0.35);
@@ -140,6 +178,7 @@ function grab(t) {
   const g = gain(filter('bandpass', 900, 1, out)); env(g.gain, t, 0.8, 0.005, 0.12); burst(t, 0.15, g, 0.8);
 }
 function crash(t, glass) {
+  sample('wood', t, 1.3, 1, 0.25);
   const out = gain(sfxBus, 0.8); send(out, 0.25);
   for (let i = 0; i < 6; i++) {
     const at = t + Math.random() * 0.12, g = gain(filter('bandpass', 1500 + Math.random() * 2000, 2, out));
@@ -150,6 +189,10 @@ function crash(t, glass) {
     const at = t + 0.02 + Math.random() * 0.35, g = gain(out); env(g.gain, at, 0.12, 0.001, 0.15 + Math.random() * 0.2);
     osc('sine', 2600 + Math.random() * 4200, at, at + 0.4, g);
   }
+}
+// A body lands on the floor.
+function fall(t, weight = 1) {
+  if (!sample('fall', t, 1 + weight * 0.8, 1, 0.15)) blow(t, 0.5 * weight, 0.6);
 }
 function knockout(t) {
   blow(t, 1, 0.8);
@@ -189,7 +232,7 @@ function duck(t, depth, len) {
   const p = musicBus.gain; p.cancelScheduledValues(t); p.setValueAtTime(MUSIC * depth, t); p.linearRampToValueAtTime(MUSIC, t + len);
 }
 
-const effects = { blow, whoosh, block, parry, shatterGuard, slam, grab, crash, knockout, beep, bell, jingle, click };
+const effects = { blow, whoosh, block, parry, shatterGuard, slam, grab, crash, fall, knockout, beep, bell, jingle, click };
 export function play(name, opts = {}) {
   if (mode === 'off' || !init() || ctx.state !== 'running') return;
   const f = effects[name]; if (!f) return;
@@ -202,6 +245,7 @@ export function play(name, opts = {}) {
     else if (name === 'beep') f(t, !!opts.high);
     else if (name === 'bell') f(t, opts.times || 1);
     else if (name === 'jingle') f(t, !!opts.won);
+    else if (name === 'fall') f(t, opts.weight ?? 1);
     else f(t);
     if (name === 'blow' && (opts.weight ?? 0) > 0.6) duck(t, 0.45, 0.4);
   } catch {}

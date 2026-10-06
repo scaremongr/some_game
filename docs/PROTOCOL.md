@@ -73,7 +73,9 @@ live in `DATA_DIR` (`/app/data`, a host volume in production).
 `winner`: -1 tie/undecided, 0 left, 1 right. `remaining` and `phase_ticks` are
 60 Hz simulation ticks. `event` is monotonic within a match; `event_kind`:
 1 hit, 2 block, 3 parry, 4 guard break, 5 grab, 6 counter, 7 punish, 8 breaker,
-9 throw broken (tech or two grabs at once), 10 throw slam (the throw's damage).
+9 throw broken (tech or two grabs at once), 10 throw slam (the throw's damage),
+11 counter-hit crumple (a counter-hit kick, side kick or hook on a standing
+body: it reels in place for `CRUMPLE` = 56 ticks).
 
 The server runs the same isolated Rust/WASM module as browser training at 60 Hz.
 It accepts inputs only; position, HP, stamina, damage, time and wins sent by
@@ -117,8 +119,8 @@ frame 8).
 Fighters add `crouch`, `meter` (0..1000), `blockstun`, `down`, `invulnerable`,
 `juggle`, `combo_damage`, `confirmed`, `prop_hit`, `air_attack`, `held` (ticks
 left in a thrower's grip: the victim is pinned 600 mm in front of the thrower,
-then slammed and knocked down) and `parry_cooldown` (ticks until a re-raised
-guard gets its parry window again). Between rounds and after the match airborne
+then slammed and knocked down), `parry_cooldown` (ticks until a re-raised
+guard gets its parry window again) and `quick_rise` (getting up quickly). Between rounds and after the match airborne
 fighters still fall and slide to rest; nothing else moves. High jabs miss
 unprotected crouching opponents; lows (low kick, sweep) beat standing guard;
 overheads beat low guard; jumps evade lows. Throws cannot grab airborne,
@@ -138,7 +140,11 @@ uppercut. On block J-J, J-U, J(cross)-U and low-J continue. Combo damage scales
 only while the victim cannot recover; a fighter hit in the air has no control
 until landing (a full meter still escapes). Four air hits force landing;
 knockdown lasts 56 ticks (42 after a throw's slam) and wakeup grants 12 ticks of
-protection that ends when the fighter acts. A grabbed victim breaks the throw by
+protection that ends when the fighter acts; jump (up) pressed on the floor (from
+frame 20 of the knockdown) gets up twice as fast with only 3 ticks of
+protection. A counter hit (into the opponent's startup) adds 12 ticks of stun;
+a counter-hit kick, side kick or hook crumples (event 11). A landed uppercut
+jump-cancels after its active frames (jump pressed): the air kick then juggles. A grabbed victim breaks the throw by
 pressing grab within 10 ticks of the grab (event 9; both stagger apart, no
 damage); otherwise the throw's damage lands with the slam (event 10). Special
 costs 500 meter. Block+dash during hitstun spends a full bar to escape.

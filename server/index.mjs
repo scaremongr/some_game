@@ -175,7 +175,7 @@ export async function createArena(options = {}) {
       if (path === '/config.json') { res.setHeader('Content-Type','application/json'); res.setHeader('Cache-Control','no-store'); return res.end(JSON.stringify({dev, miniApp, protocol:3})); }
       const file = resolve(root, '.' + decodeURIComponent(path === '/' ? '/index.html' : path));
       if (!file.startsWith(root.endsWith(sep) ? root : root + sep)) { res.writeHead(403); return res.end(); }
-      const mime = {'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.wasm':'application/wasm','.glb':'model/gltf-binary','.pack':'application/octet-stream','.json':'application/json; charset=utf-8','.jpg':'image/jpeg','.png':'image/png','.mp3':'audio/mpeg'}[extname(file)];
+      const mime = {'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.wasm':'application/wasm','.glb':'model/gltf-binary','.pack':'application/octet-stream','.json':'application/json; charset=utf-8','.jpg':'image/jpeg','.png':'image/png','.mp3':'audio/mpeg','.wav':'audio/wav'}[extname(file)];
       if (!mime) { res.writeHead(404); return res.end(); }
       const bytes = await readFile(file);
       res.setHeader('Content-Type',mime); res.setHeader('Cache-Control','no-cache'); res.setHeader('Accept-Ranges','bytes');

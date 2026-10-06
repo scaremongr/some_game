@@ -31,6 +31,18 @@ pub const WALK_SLOW: i32 = 12;
 /// After lowering the guard, raising it again within this many ticks blocks
 /// without the parry window: tapping the button is not a free parry.
 pub const PARRY_COOLDOWN: u32 = 18;
+/// A counter hit (a blow into the startup of the opponent's attack) stuns
+/// this much longer: room for a follow-up the plain hit does not give.
+pub const COUNTER_STUN: u32 = 12;
+/// A counter-hit kick or hook leaves the victim reeling in place this long:
+/// a step in and a free combo for whoever read the attack.
+pub const CRUMPLE: u32 = 56;
+/// From this frame of a knockdown (on the floor), pressing up stands the
+/// fighter up twice as fast, without the wake-up protection.
+pub const QUICK_RISE_FROM: u32 = 20;
+/// Wake-up protection after a normal and after a quick rise (ticks).
+pub const WAKE_GUARD: u32 = 12;
+pub const QUICK_WAKE_GUARD: u32 = 3;
 use room::ARENA_LIMIT;
 use moves::TECH;
 // action: 0 idle, 1 jab, 2 heavy, 3 dash, 4 throw, 5 stun (see PROTOCOL.md)
@@ -81,6 +93,9 @@ pub struct Fighter {
     /// Fighting style (`moves::ALLROUND`, `PRESSURE`, `RANGE`).
     #[nserde(default)]
     pub style: u32,
+    /// Getting up quickly (pressed up while on the floor).
+    #[nserde(default)]
+    pub quick_rise: bool,
 }
 /// A throw holds its victim this long, from the grab to the slam.
 pub const HOLD: u32 = 32;
@@ -128,6 +143,7 @@ impl Fighter {
             held: 0,
             parry_cooldown: 0,
             style: 0,
+            quick_rise: false,
         }
     }
     /// The attack this fighter is performing, with its style's frame data.
@@ -172,7 +188,8 @@ pub struct Match {
     pub freeze: u32,
     pub event: u32,
     // 1 hit, 2 block, 3 parry, 4 guard break, 5 grab, 6 counter, 7 punish,
-    // 8 combo breaker, 9 throw broken (tech), 10 throw slam
+    // 8 combo breaker, 9 throw broken (tech), 10 throw slam, 11 counter-hit
+    // crumple (the victim reels for CRUMPLE ticks)
     pub event_kind: u32,
     pub event_target: usize,
     pub seed: u32,
@@ -219,11 +236,17 @@ impl Match {
             self.phase = 3;
         }
     }
+    /// The sparring bot's habit this round (`Habit`): a tendency a player
+    /// can notice and punish, different from round to round.
+    pub fn bot_habit(&self, side: usize) -> u32 {
+        mix(self.round.wrapping_mul(0x9E37) ^ self.seed ^ (side as u32).wrapping_mul(0x51ED)) % 5
+    }
     /// Sparring bot with human limits: it sees an attack only after ~200 ms,
     /// guards about half the time it could (sometimes at the wrong height),
     /// never parries on reaction, moves in and out and attacks often. Its
     /// plans come from a hash of short time windows, so they hold for a
-    /// while without extra state.
+    /// while without extra state. Each round it leans on one habit
+    /// (`bot_habit`): jumping in, turtling, grabbing or swinging heavies.
     pub fn bot_input(&self, side: usize) -> u32 {
         let distance = (self.fighters[0].x - self.fighters[1].x).abs();
         let toward = if side == 0 { RIGHT } else { LEFT };
@@ -238,9 +261,24 @@ impl Match {
         };
         let salt = self.round.wrapping_mul(7919) ^ (side as u32).wrapping_mul(104_729) ^ self.seed;
         let roll = |key: u32| mix(key ^ salt) % 100;
+        let habit = self.bot_habit(side);
         // Grabbed: breaks the throw about one time in four.
         if me.held > 0 {
             return if me.held == HOLD - 4 && roll(self.tick) < 25 { THROW } else { 0 };
+        }
+        // On the floor: gets up quickly about four times in ten.
+        if me.down > 0 {
+            let quick = roll(self.tick.wrapping_sub(me.frame) ^ 0x0B) < 40;
+            return if quick && me.frame == QUICK_RISE_FROM + 1 { JUMP } else { 0 };
+        }
+        // Its uppercut landed: half the time it jumps after the body and kicks.
+        if me.action == 10 && me.confirmed && me.attack().is_some_and(|m| me.frame == m.startup + m.active + 1) {
+            if roll(self.tick ^ 0xC4A5E) < 50 {
+                return JUMP | toward;
+            }
+        }
+        if me.y > 0 && !me.air_attack && enemy.juggle > 0 && enemy.y > 0 && distance < 1500 {
+            return KICK;
         }
         // A full bar breaks a real combo now and then, a moment after a hit.
         if (me.stun > 0 || (me.juggle > 0 && me.y > 0))
@@ -323,6 +361,11 @@ impl Match {
         }
         let plan = roll(window);
         let opening = (self.tick + side as u32 * 7) % 15 == 0;
+        // Habits: 1 jumps in, 2 turtles, 3 grabs, 4 swings heavies.
+        let jump_in = if habit == 1 { 60 } else { 84 };
+        if habit == 1 && opening && distance > 1300 && distance < far + 600 && plan >= jump_in {
+            return JUMP | toward;
+        }
         if distance > far {
             return match plan {
                 0..=74 => toward,
@@ -330,6 +373,16 @@ impl Match {
                 85..=89 if opening && me.style == moves::PRESSURE => DASH | toward,
                 _ => 0,
             };
+        }
+        if habit == 2 && (36..=79).contains(&plan) {
+            // A turtle: a long guard, rarely the first to strike.
+            return BLOCK | if roll(window ^ 0xC0) < 35 { CROUCH } else { 0 };
+        }
+        if habit == 3 && opening && distance < 1050 && roll(window ^ 0x6A) < 45 {
+            return THROW;
+        }
+        if habit == 4 && opening && plan < 50 && distance < 1900 {
+            return if roll(window ^ 0x4E) < 60 { HEAVY } else { KICK };
         }
         match plan {
             0..=35 => {
@@ -534,12 +587,18 @@ impl Match {
                 f.guard = false;
                 f.crouch = false;
                 f.action = 15;
-                f.down -= 1;
+                // Up on the floor: a quick rise (the get-up plays twice as fast).
+                if !f.quick_rise && f.frame >= QUICK_RISE_FROM && f.buffer_time > 0 && f.buffered & JUMP != 0 {
+                    f.quick_rise = true;
+                    f.buffer_time = 0;
+                }
+                f.down = f.down.saturating_sub(if f.quick_rise { 2 } else { 1 });
                 f.frame = KNOCKDOWN - f.down.min(KNOCKDOWN);
                 if f.down == 0 {
                     f.action = 0;
                     f.stun = 0;
-                    f.invulnerable = 12;
+                    f.invulnerable = if f.quick_rise { QUICK_WAKE_GUARD } else { WAKE_GUARD };
+                    f.quick_rise = false;
                     f.juggle = 0;
                 }
                 continue;
@@ -590,7 +649,13 @@ impl Match {
                     && f.dash_dir == f.facing
                     && f.frame >= moves::DASH_CANCEL
                     && !matches!(candidate, 0 | 3);
-                if cancel || dash_in || f.frame >= f.duration(f.action) {
+                // A landed uppercut can be chased: up after its active frames
+                // jumps after the launched opponent (an air kick follows).
+                let chase = f.action == 10
+                    && f.confirmed
+                    && buffered & JUMP != 0
+                    && f.attack().is_some_and(|m| f.frame >= m.startup + m.active);
+                if cancel || dash_in || chase || f.frame >= f.duration(f.action) {
                     f.action = 0;
                     f.frame = 0;
                 }
@@ -803,6 +868,8 @@ impl Match {
                 };
                 let counter = d_move.is_some_and(|m| d.frame < m.startup);
                 let punish = d_move.is_some_and(|m| d.frame >= m.startup + m.active);
+                // A counter-hit kick or hook on a standing body: it reels.
+                let crumple = counter && d.y == 0 && matches!(a.action, 8 | 17 | 18);
                 let dealt = (m.damage + if counter { 3 } else { 0 })
                     * (100 - chain as i32 * 13).max(35)
                     / 100;
@@ -813,13 +880,18 @@ impl Match {
                     defender.meter = (defender.meter + dealt * 8).min(1000);
                 }
                 // A counter hit stuns longer: room for a bigger follow-up.
-                defender.stun = m.stun + if counter { 6 } else { 0 };
+                defender.stun = if crumple {
+                    CRUMPLE
+                } else {
+                    m.stun + if counter { COUNTER_STUN } else { 0 }
+                };
                 defender.action = 5;
                 defender.frame = 0;
                 defender.guard = false;
                 defender.crouch = false;
                 defender.blockstun = 0;
-                defender.vx = a.facing * m.push;
+                // A reeling body stays where it was struck.
+                defender.vx = a.facing * if crumple { 8 } else { m.push };
                 defender.recoil_v = if m.heavy() { 150 } else { 80 };
                 if m.launch > 0 || d.y > 0 {
                     defender.juggle += 1;
@@ -860,6 +932,8 @@ impl Match {
                 }
                 self.event_kind = if grab {
                     5
+                } else if crumple {
+                    11
                 } else if punish {
                     7
                 } else if counter {
@@ -1677,6 +1751,90 @@ mod tests {
         run(&mut fresh, [LIGHT, 0], 4);
         run(&mut fresh, [0, BLOCK], 8);
         assert_eq!(fresh.event_kind, 3);
+    }
+    #[test]
+    fn counter_hits_reward_the_read() {
+        // A kick into the startup of a heavy: the victim reels long enough
+        // for a free string.
+        let mut m = duel();
+        m.step([0, HEAVY]);
+        let mut reeling = false;
+        for _ in 0..30 {
+            m.step([KICK, 0]);
+            m.step([0, 0]);
+            if m.event_kind == 11 {
+                reeling = true;
+                break;
+            }
+        }
+        assert!(reeling, "counter-hit kick crumples");
+        assert!(m.fighters[1].stun > COUNTER_STUN + 20);
+        let hp = m.fighters[1].hp;
+        for t in 0..60 {
+            m.step([if t % 10 < 3 { LIGHT } else { 0 }, LIGHT]);
+        }
+        assert!(m.fighters[0].combo >= 3, "the reel is comboed: {}", m.fighters[0].combo);
+        assert!(m.fighters[1].hp < hp);
+        // A jab into the heavy is a plain counter: a few ticks of extra stun.
+        let mut jab = duel();
+        jab.step([0, HEAVY]);
+        run(&mut jab, [LIGHT, 0], 9);
+        assert_eq!(jab.event_kind, 6);
+        let stun = attack(1).unwrap().stun + COUNTER_STUN;
+        assert!(jab.fighters[1].stun <= stun && jab.fighters[1].stun > stun - 10);
+    }
+    #[test]
+    fn a_landed_uppercut_is_chased_into_the_air() {
+        let mut m = duel();
+        run(&mut m, [CROUCH | LIGHT, 0], 10);
+        run(&mut m, [CROUCH | HEAVY, 0], 20);
+        assert!(m.fighters[1].juggle == 1 && m.fighters[1].y > 0, "launched");
+        // Up-forward once the uppercut's active frames are over: a jump.
+        let mut jumped = 0;
+        for _ in 0..30 {
+            m.step([JUMP | RIGHT, 0]);
+            m.step([0, 0]);
+            if m.fighters[0].y > 0 {
+                jumped = m.tick;
+                break;
+            }
+        }
+        assert!(jumped > 0, "the uppercut jump-cancels on hit");
+        run(&mut m, [0, 0], 4);
+        let hp = m.fighters[1].hp;
+        run(&mut m, [KICK, 0], 2);
+        run(&mut m, [0, 0], 20);
+        assert!(m.fighters[1].hp < hp, "the air kick connects");
+        assert_eq!(m.fighters[0].combo, 3);
+        // A blocked or whiffed uppercut cannot be jumped out of.
+        let mut whiff = duel();
+        whiff.fighters[1].x = 2500;
+        run(&mut whiff, [CROUCH | HEAVY, 0], 18);
+        run(&mut whiff, [JUMP, 0], 2);
+        assert_eq!(whiff.fighters[0].y, 0);
+        assert_eq!(whiff.fighters[0].action, 10);
+    }
+    #[test]
+    fn up_on_the_floor_gets_up_quicker_without_the_protection() {
+        let rise = |press: bool| {
+            let mut m = duel();
+            m.fighters[0].down = KNOCKDOWN;
+            m.fighters[0].action = 15;
+            for t in 0..KNOCKDOWN {
+                let up = press && m.fighters[0].frame == QUICK_RISE_FROM + 2;
+                m.step([if up { JUMP } else { 0 }, 0]);
+                if m.fighters[0].down == 0 {
+                    return (t + 1, m.fighters[0].invulnerable, m.fighters[0].y);
+                }
+            }
+            panic!("still down");
+        };
+        let (normal, guard, _) = rise(false);
+        let (quick, quick_guard, y) = rise(true);
+        assert_eq!(normal, KNOCKDOWN);
+        assert!(quick + 12 < normal, "quick {quick} vs {normal}");
+        assert_eq!((guard, quick_guard), (WAKE_GUARD, QUICK_WAKE_GUARD));
+        assert_eq!(y, 0, "the press is spent on the rise, not a jump");
     }
     #[test]
     fn attacking_on_wakeup_drops_the_protection() {

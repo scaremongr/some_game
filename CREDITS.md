@@ -18,7 +18,14 @@ https://creativecommons.org/licenses/by/4.0/ . Prepared for the game by
 Poly Haven (https://polyhaven.com), CC0 — no attribution required; the list
 of assets is in `tools/room/fetch_polyhaven.py`.
 
+## Sound effects (CC0)
+
+The recorded punches, blocks, body falls and breaking wood
+(`assets/sound/sfx/*.wav`, made by `tools/sfx.py`) come from "Impact Sounds"
+by Kenney (https://kenney.nl/assets/impact-sounds), CC0 — no attribution
+required; thank you, Kenney.
+
 ## Everything else
 
-The night city behind the windows (`tools/backdrop/city.py`), the sound
-effects (`web/sound.js`) and the room layout are made for this game.
+The night city behind the windows (`tools/backdrop/city.py`), the synthesised
+sound effects (`web/sound.js`) and the room layout are made for this game.

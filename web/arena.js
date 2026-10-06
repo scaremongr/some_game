@@ -291,7 +291,7 @@ function haptic(kind = 'light') {
 }
 
 function screen(next) {
-  mode = next; panels.forEach(id => show(id, false)); show('announcement', false); text('combat-event', '');
+  mode = next; panels.forEach(id => show(id, false)); show('announcement', false); show('cue', false); text('combat-event', '');
   ended = 0; resultShown = false; clearTimeout(resultTimer); show('room-damage');
   if (fighting()) { heard = null; matchesPlayed++; }
   pickMusic();
@@ -399,23 +399,65 @@ const soundDelay = () => mode === 'online' && !net ? NET_DELAY / 60 : 0.015;
 function listen(st) {
   const delay = soundDelay();
   const count = Math.ceil(st.phase_ticks / 60), broken = st.objects.map(o => o.hp === 0);
-  const now = { phase: st.phase, count, actions: st.fighters.map(f => f.action), frames: st.fighters.map(f => f.frame), hp: st.fighters.map(f => f.hp), broken };
+  const now = { phase: st.phase, count, actions: st.fighters.map(f => f.action), frames: st.fighters.map(f => f.frame), hp: st.fighters.map(f => f.hp), ys: st.fighters.map(f => f.y), broken };
   const was = heard; heard = now;
   if (!was) { if (st.phase === 0) sfx.play('beep'); return; }
   if (st.phase === 0 && (was.phase !== 0 || count !== was.count)) sfx.play('beep');
   if (st.phase === 1 && was.phase === 0) { sfx.play('beep', { high: true }); sfx.play('bell'); }
-  if (st.phase === 2 && was.phase === 1) sfx.play('bell', { times: 2, delay });
+  if (st.phase === 2 && was.phase === 1) { sfx.play('bell', { times: 2, delay }); adviseOnHabit(); }
+  if (st.phase === 1 && was.phase === 0) habits = { jump: 0, block: 0, grab: 0, heavy: 0 };
   if (st.phase === 3 && was.phase !== 3) { sfx.play('bell', { times: 3, delay }); sfx.play('jingle', { won: st.winner === side, delay: 1.3 }); }
   for (let i = 0; i < 2; i++) {
     const a = st.fighters[i].action, f = st.fighters[i];
     const started = ATTACKS.has(a) && (a !== was.actions[i] || f.frame < was.frames[i]);
     if (started) sfx.play('whoosh', { weight: weightOf(a) - 0.1, delay });
+    if (i !== side && st.phase === 1) {
+      if (started && (a === 2 || a === 12)) habits.heavy++;
+      if (started && a === 4) habits.grab++;
+      if (!was.ys[i] && f.y > 0 && a !== 5 && a !== 15) habits.jump++;
+    }
     if (f.hp === 0 && was.hp[i] > 0) sfx.play('knockout', { delay });
+    // Knocked down: the body meets the floor (at once from the air, a moment
+    // later when swept or toppled from standing; a throw has its own slam).
+    if (a === 15 && was.actions[i] !== 15 && st.event_kind !== 10)
+      sfx.play('fall', { weight: 0.8, delay: delay + (was.ys?.[i] > 0 ? 0 : 0.28) });
   }
   broken.forEach((b, i) => { if (b && !was.broken[i]) sfx.play('crash', { glass: i === 5 || i === 6, delay }); });
   // The last seconds and low health open up the fight track.
   const low = Math.min(...st.fighters.map(f => f.hp));
   sfx.heat(st.phase === 1 ? Math.max((40 - low) / 40, st.remaining < 600 ? 0.7 : 0) : 0);
+}
+// ---- Cues and the opponent's habits --------------------------------------------
+// A prompt for a chance open right now that the pad does not show: getting up
+// quickly, chasing a launched body, finishing one that reels.
+const QUICK_RISE_FROM = 20;
+const keyOr = (label, key) => touch ? label : key;
+function cue() {
+  const me = state.fighters[side], foe = state.fighters[1 - side], up = keyOr('↑', 'W');
+  let say = '';
+  if (state.phase !== 1) say = '';
+  else if (me.down > 0 && me.frame >= QUICK_RISE_FROM - 8 && !me.quick_rise) say = up + ' — ВСТАТЬ БЫСТРО';
+  else if (me.action === 10 && me.confirmed && foe.juggle > 0 && foe.y > 0) say = up + ' — ЗА НИМ В ПРЫЖОК';
+  else if (me.y > 0 && !me.air_attack && foe.juggle > 0 && foe.y > 0) say = keyOr('НОГА', 'U') + ' — ДОБЕЙ В ВОЗДУХЕ';
+  else if (foe.action === 5 && foe.stun > 12 && state.event_kind === 11 && state.event_target !== side) say = 'ПОПЛЫЛ — ДОБИВАЙ!';
+  if ($('cue').textContent !== say) {
+    text('cue', say);
+    // Portrait phones: just above the pad, clear of the fighters.
+    const pad = $('pad').getBoundingClientRect();
+    $('cue').style.top = touch && innerHeight > innerWidth && pad.height ? Math.round(pad.top - 44) + 'px' : '';
+  }
+  show('cue', !!say);
+}
+// What the opponent leaned on this round, and how to punish it.
+let habits = { jump: 0, block: 0, grab: 0, heavy: 0 };
+function adviseOnHabit() {
+  const advice = [
+    [habits.jump / 4, `Соперник часто прыгает. Встречай апперкотом (${keyOr('↓ + СИЛЬНЫЙ', 'C + K')}) и прыгай за ним (${keyOr('↑', 'W')}).`],
+    [habits.block / 6, `Соперник сидит в блоке. Ломай захватом (${keyOr('ЗАХВАТ', 'L')}) или низким ударом (${keyOr('↓ + УДАР', 'C + J')}).`],
+    [habits.grab / 3, `Соперник любит хватать. Сразу после захвата жми ${keyOr('ВЫРВАТЬСЯ', 'L')} или опережай его джебом.`],
+    [habits.heavy / 4, `Соперник машет сильными. Ударь ногой (${keyOr('НОГА', 'U')}) в начало замаха — контратака, он поплывёт.`],
+  ].sort((a, b) => b[0] - a[0])[0];
+  if (advice[0] >= 1) setTimeout(() => toast(advice[1], 4800), 700);
 }
 function eventSound(kind, attacker) {
   const delay = soundDelay();
@@ -424,7 +466,7 @@ function eventSound(kind, attacker) {
   else if (kind === 3) sfx.play('parry', { delay });
   else if (kind === 4) sfx.play('shatterGuard', { delay });
   else if (kind === 5) sfx.play('grab', { delay });
-  else if (kind === 6 || kind === 7) sfx.play('blow', { weight: 0.9, delay });
+  else if (kind === 6 || kind === 7 || kind === 11) sfx.play('blow', { weight: 0.9, delay });
   else if (kind === 8) { sfx.play('whoosh', { weight: 1, delay }); sfx.play('blow', { weight: 0.5, delay }); }
   else if (kind === 10) sfx.play('slam', { delay });
 }
@@ -463,17 +505,18 @@ function accept(next, isPaused = false, final = next.phase === 3) {
   const special = document.querySelector('.act.special');
   special.classList.toggle('charged', mine.meter >= 500);
   special.classList.toggle('breaker', breakerReady());
-  relabel();
+  relabel(); cue();
   const label = paused ? 'СОПЕРНИК ПЕРЕПОДКЛЮЧАЕТСЯ' : state.phase === 0 ? String(Math.max(1, Math.ceil(state.phase_ticks / 60))) : state.phase === 2 ? (state.winner < 0 ? 'НИЧЬЯ' : state.winner === side ? 'ТВОЙ РАУНД' : 'РАУНД СОПЕРНИКА')
     : state.phase === 3 && final && !resultShown ? (state.winner < 0 ? 'НИЧЬЯ' : state.winner === side ? 'ПОБЕДА!' : 'ПОРАЖЕНИЕ') : '';
   $('announcement').classList.toggle('final', state.phase === 3 && final);
   text('announcement', label); show('announcement', !!label);
   if (state.event !== lastEvent) {
     lastEvent = state.event; eventUntil = performance.now() + 700;
-    const labels = ['', 'ПОПАДАНИЕ', 'БЛОК', 'ПАРИРОВАНИЕ', 'ЗАЩИТА СЛОМАНА', 'ЗАХВАТ', 'КОНТРАТАКА', 'НАКАЗАНИЕ', 'ВЫХОД ИЗ КОМБО', 'ЗАХВАТ СОРВАН', 'БРОСОК'];
+    const labels = ['', 'ПОПАДАНИЕ', 'БЛОК', 'ПАРИРОВАНИЕ', 'ЗАЩИТА СЛОМАНА', 'ЗАХВАТ', 'КОНТРАТАКА', 'НАКАЗАНИЕ', 'ВЫХОД ИЗ КОМБО', 'ЗАХВАТ СОРВАН', 'БРОСОК', 'КОНТРАТАКА · ПОПЛЫЛ'];
     const combo = state.fighters[1 - state.event_target].combo;
     text('combat-event', (combo > 1 && ![2, 9, 10].includes(state.event_kind) ? combo + ' × СВЯЗКА · ' : '') + (labels[state.event_kind] || ''));
     eventSound(state.event_kind, state.fighters[1 - state.event_target].action);
+    if (state.event_kind === 2 && state.event_target !== side) habits.block++;
     haptic(state.event_kind === 2 ? 'light' : state.event_target === side ? 'heavy' : 'medium');
   }
   if (state.phase === 3 && final) {

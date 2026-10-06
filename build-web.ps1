@@ -33,6 +33,9 @@ try {
     if (Test-Path -LiteralPath $music) {
         New-Item -ItemType Directory -Force -Path (Join-Path $arenaDist 'assets/sound') | Out-Null
         Copy-Item -Path (Join-Path $music '*.mp3') -Destination (Join-Path $arenaDist 'assets/sound') -Force
+        # Recorded impacts (tools/sfx.py; Kenney, CC0).
+        New-Item -ItemType Directory -Force -Path (Join-Path $arenaDist 'assets/sound/sfx') | Out-Null
+        Copy-Item -Path (Join-Path $music 'sfx/*.wav') -Destination (Join-Path $arenaDist 'assets/sound/sfx') -Force
     }
     # The night city behind the windows (tools/backdrop/city.py).
     $backdrop = Join-Path $arenaRoot 'assets/backdrop'

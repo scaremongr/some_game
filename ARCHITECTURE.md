@@ -60,10 +60,10 @@ Principles:
 | `src/game/dance.rs`, `dancer.rs`, `mirror.rs`, `clips.rs`, `menu.rs`, `rhythm.rs` | Legacy dance game scenes (run natively with args `dance`, `mirror`, `clips`). `dancer.rs` also holds `Character` used by the fight. |
 | `src/bin/fightpack.rs` | Packs Mixamo clips into a fight pack, optionally retargeted onto a given fighter (`--character`). |
 | `src/bin/inspect.rs`, `beatmap.rs` | Model inspector; legacy dance tool. |
-| `web/` | `index.html` (all UI markup), `arena.js` (UI, input, WebSocket client, training loop, rating/leaderboard/card/revenge UI), `arena.css`, `bridge.js` (miniquad plugin: JS↔wasm imports), `gl.js` (**patched** miniquad loader), `combat.js` (loads `arena_combat.wasm` for Node and browser; `load()` restores a snapshot), `predict.js` (online prediction/rollback), `sound.js` (WebAudio: synthesised effects; music = recorded tracks `assets/sound/*.mp3` from `tools/music.py`, Kevin MacLeod CC BY 4.0 — credits in `CREDITS.md` and the help dialog — streamed by one `<audio>` element created in the first tap (iOS) through the mixer; modes all/sfx/off; the server answers byte ranges, which Safari needs for audio), `scenery.js` (decodes the city layers, draws the TV/laptop/canvas pictures on canvases → `window.arenaImages`), `audio.js`, `pose.js` (legacy). |
+| `web/` | `index.html` (all UI markup), `arena.js` (UI, input, WebSocket client, training loop, rating/leaderboard/card/revenge UI), `arena.css`, `bridge.js` (miniquad plugin: JS↔wasm imports), `gl.js` (**patched** miniquad loader), `combat.js` (loads `arena_combat.wasm` for Node and browser; `load()` restores a snapshot), `predict.js` (online prediction/rollback), `sound.js` (WebAudio: contact sounds are recordings `assets/sound/sfx/*.wav` from `tools/sfx.py` — Kenney "Impact Sounds", CC0, takes picked without repeats — over a synthesised low end, the rest synthesised; music = recorded tracks `assets/sound/*.mp3` from `tools/music.py`, Kevin MacLeod CC BY 4.0 — credits in `CREDITS.md` and the help dialog — streamed by one `<audio>` element created in the first tap (iOS) through the mixer; modes all/sfx/off; the server answers byte ranges, which Safari needs for audio), `scenery.js` (decodes the city layers, draws the TV/laptop/canvas pictures on canvases → `window.arenaImages`), `audio.js`, `pose.js` (legacy). |
 | `server/` | `index.mjs` (HTTP + WS server, rooms, sessions, clock), `auth.mjs` (Telegram initData HMAC/Ed25519), `bot.mjs` (Telegram bot), `league.mjs` (ratings, leagues, chat tables, JSON persistence), `deploy-probe.mjs` (post-deploy check run inside the container), `*.test.mjs` (node:test). |
 | `scripts/` | Build/test/deploy helpers: browser tests (Playwright), `pose-sheet.mjs`, `fight-video.mjs`, `tile-frames.mjs`, `fighter-portraits.mjs`, `bot-art.mjs`, `publish.py` + `install-server.py` (deploy), `sshconf.py`, `server-inspect.py`. |
-| `tools/` | Asset pipelines: Mixamo download/convert/pack, fighters import, room build/bake (`tools/room/`), the night city (`tools/backdrop/city.py` → `assets/backdrop/far.jpg`, `near.png`), `fetch-assets.py`, `set-game-bot-token.py`. |
+| `tools/` | Asset pipelines: Mixamo download/convert/pack, fighters import, room build/bake (`tools/room/`), the night city (`tools/backdrop/city.py` → `assets/backdrop/far.jpg`, `near.png`), recorded impacts (`tools/sfx.py` → `assets/sound/sfx/*.wav`), `fetch-assets.py`, `set-game-bot-token.py`. |
 | `assets/` | Runtime assets copied into `dist/assets` by `build-web.ps1` (see §7 for what is in git). |
 | `assets-src/` | Heavy sources (Mixamo FBX/GLB, Poly Haven models/textures). Not in git; regenerable. |
 | `docs/` | Protocol, deployment notes, bot kit (pictures + BotFather steps), legacy docs. |
@@ -304,7 +304,8 @@ Principles:
   from the live server) or rebuild them from Mixamo (README, "Анимации захвата
   движения").
 - In git: code, docs, `assets/room.glb` (Poly Haven CC0 + our geometry),
-  `assets/bot/*.jpg`, fighter portraits `assets/fighters/*.jpg`,
+  `assets/bot/*.jpg`, fighter portraits `assets/fighters/*.jpg`, music and
+  recorded impacts `assets/sound/` (CC BY / CC0, `CREDITS.md`),
   `assets/fighters/roster.json`, `assets-src/fight/clips.txt` (the clip list),
   `tools/mixamo-fight-list.json`.
 - Room furniture and materials: only CC0 or CC-BY (with `CREDITS.md`) —
@@ -333,7 +334,8 @@ python tools/fetch-assets.py                 # models + packs (not in git)
 .\build-web.ps1                              # -> dist/ (both wasm + web + assets)
 .\build-web.ps1 -Serve                       # + local dev server on :8080 (guest identities)
 cargo test --offline --lib                   # engine/game: 69 tests
-cargo test --offline --manifest-path combat/Cargo.toml   # combat: 40 tests (incl. a 3x3 style matchup run)
+cargo test --offline --manifest-path combat/Cargo.toml   # combat: 43 tests (incl. a 3x3 style matchup run)
+cargo run --release --example probe --manifest-path combat/Cargo.toml   # "human-like player vs bot" numbers (before/after a rule change)
 npm test                                     # server: 19 tests (node:test), incl. netcode at 60/200 ms RTT
 npm run test:browser; npm run test:combat; npm run test:physics   # Playwright, need dist/
 npm run test:netcode                         # two pages online at 120 ms RTT, press-to-screen with/without prediction

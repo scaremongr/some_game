@@ -23,6 +23,12 @@ const CAMERA_TURN: f32 = 0.10;
 /// Share of the recoil springs shown on captured poses, which already carry
 /// their own reaction.
 const RECOIL: f32 = 0.6;
+/// Hit-stop shudder of the struck body per remaining frozen tick (m): about
+/// 4 cm at the start of a light hit's stop, 6 cm of a heavy one, fading out.
+const HITSTOP_SHUDDER: f32 = 0.005;
+/// Clip time of a strike's wind-up goes as (frame / startup)^STRIKE_LEAD:
+/// below 1 the captured wind-up (slow to leave the guard) is shown sooner.
+const STRIKE_LEAD: f32 = 0.75;
 /// Frames of a knockdown spent falling and lying; the rest is the get-up.
 const DOWN_FALL: f32 = 22.0;
 /// Frame of a knockdown at which a captured fall hits the floor.
@@ -1185,7 +1191,7 @@ impl FighterModel {
                 && view.victim == side
                 && matches!(clip, Clip::React(_) | Clip::AirHit)
             {
-                pose.shift.z += (view.time * 95.0).sin() * 0.022;
+                pose.shift.z += (view.time * 95.0).sin() * HITSTOP_SHUDDER * view.freeze.min(12) as f32;
             }
 
             // Root: the authoritative position — a knocked out body too keeps
@@ -1222,7 +1228,10 @@ impl FighterModel {
                                 let u = ((frame - open) / (m.total as f32 - open)).clamp(0.0, 1.0);
                                 take.marks.contact - (take.marks.contact - take.marks.start) * u * u * (3.0 - 2.0 * u)
                             } else if frame <= hit {
-                                take.marks.start + (take.marks.contact - take.marks.start) * (frame / hit)
+                                // Ahead of the clip early on: the press shows
+                                // in the first frames, the blow still lands
+                                // on its hit frame.
+                                take.marks.start + (take.marks.contact - take.marks.start) * (frame / hit).max(0.0).powf(STRIKE_LEAD)
                             } else {
                                 take.marks.contact
                                     + (take.marks.end - take.marks.contact)
@@ -1367,7 +1376,7 @@ impl FighterModel {
                     }
                 }
                 if view.freeze > 0 && view.victim == side && matches!(clip, Clip::React(_) | Clip::AirHit) {
-                    shift.z += (view.time * 95.0).sin() * 0.022;
+                    shift.z += (view.time * 95.0).sin() * HITSTOP_SHUDDER * view.freeze.min(12) as f32;
                 }
                 // Physical layer: hit and landing impulses, block pushback.
                 let block = if f.guard && f.blockstun > 0 { (f.blockstun as f32 / 12.0).min(1.0) } else { 0.0 };
@@ -1897,7 +1906,7 @@ mod tests {
         for (label, case) in cases {
             let mut track: Vec<[Vec3; 2]> = vec![];
             play(&mut model, 400, |t, g| match case {
-                0 => [[LIGHT, KICK, HEAVY, 0][(t / 25 % 4) as usize] * u32::from(t % 25 < 2), 0],
+                0 => [[LIGHT, KICK, HEAVY, 0][(t / 40 % 4) as usize] * u32::from(t % 40 < 2), 0],
                 _ => {
                     // The right side guards a stream of blows from close by.
                     let near = (g.fighters[1].x - g.fighters[0].x) > 1100;

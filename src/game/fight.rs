@@ -304,6 +304,8 @@ impl FightScene {
                 }
                 return;
             }
+            // A counter-hit kick or hook: the body reels, dazed.
+            11 => self.reaction[target] = Reaction::GuardBreak,
             _ => {
                 // A counter hit spins the body round (it also stuns longer).
                 let r = Reaction::from_attack(e.attacker_action);
@@ -312,7 +314,8 @@ impl FightScene {
         }
         let victim = &self.fighters[target];
         let blow = moves::attack_for(self.fighters[1 - target].style, e.attacker_action);
-        let heavy = blow.is_some_and(|m| m.heavy());
+        // Counter hits land like heavy blows whatever struck.
+        let heavy = blow.is_some_and(|m| m.heavy()) || matches!(e.kind, 6 | 11);
         let low = blow.is_some_and(|m| m.height == moves::Height::Low);
         let fallback = vec3(
             self.bodies[target].x + victim.facing as f32 * 0.18,
@@ -403,7 +406,7 @@ impl FightScene {
                     16 => (Part::Legs, vec3(away * 0.4, 0.3, 0.0)),
                     _ => (Part::Head, vec3(away, 0.1, 0.0)),
                 };
-                let speed = if heavy { 3.4 } else { 2.0 } * if e.kind == 6 { 1.3 } else { 1.0 };
+                let speed = if heavy { 3.4 } else { 2.0 } * if matches!(e.kind, 6 | 11) { 1.3 } else { 1.0 };
                 model.push(target, part, dir, speed);
             }
         }
