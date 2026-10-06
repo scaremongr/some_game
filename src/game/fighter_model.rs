@@ -29,6 +29,8 @@ const HITSTOP_SHUDDER: f32 = 0.005;
 /// Clip time of a strike's wind-up goes as (frame / startup)^STRIKE_LEAD:
 /// below 1 the captured wind-up (slow to leave the guard) is shown sooner.
 const STRIKE_LEAD: f32 = 0.75;
+/// Frames a pose moves on per tick of hit-stop (slow motion, not a freeze).
+const HITSTOP_CREEP: f32 = 0.12;
 /// Frames of a knockdown spent falling and lying; the rest is the get-up.
 const DOWN_FALL: f32 = 22.0;
 /// Frame of a knockdown at which a captured fall hits the floor.
@@ -257,6 +259,8 @@ struct Side {
     secondary: Secondary,
     blockstun: u32,
     last_frame: f32,
+    /// Frames the pose has crept on through the current hit-stop.
+    creep: f32,
     /// Metres walked since the walk began, and its direction (+1 forward).
     /// The cycle keeps its captured stride: a faster walk steps quicker.
     walk_phase: f32,
@@ -310,6 +314,7 @@ impl Side {
             secondary: Secondary::default(),
             blockstun: 0,
             last_frame: 0.0,
+            creep: 0.0,
             walk_phase: 0.0,
             walk_dir: 1.0,
             walk_weight: 0.0,
@@ -947,7 +952,11 @@ impl FighterModel {
             } else {
                 s.clip_time += dt;
             }
-            let frame = body.frame;
+            // Hit-stop: the blow and the reaction creep on in slow motion
+            // (under a frame in all) instead of a dead freeze.
+            let creeping = view.freeze > 0 && !view.preview && matches!(clip, Clip::Attack(_) | Clip::React(_) | Clip::AirHit);
+            s.creep = if creeping { (s.creep + dt * 60.0 * HITSTOP_CREEP).min(0.9) } else { 0.0 };
+            let frame = body.frame + s.creep;
             // A new hit while already reeling restarts the reaction.
             let rehit = !started
                 && matches!(clip, Clip::React(_) | Clip::AirHit)

@@ -14,9 +14,12 @@ const TRACK_FILES = { lobby: 'assets/sound/lobby.mp3', fight1: 'assets/sound/fig
 // Mix levels: effects stay present but never harsh; music under them.
 const SFX = 0.5, MUSIC = 0.17;
 
+// Android WebViews underrun with the smallest buffer (the sound gurgles):
+// a slightly longer one there; elsewhere the quickest.
+const LATENCY = /Android/i.test(navigator.userAgent) ? 'balanced' : 'interactive';
 function init() {
   if (ctx || !AC) return ctx;
-  try { ctx = new AC({ latencyHint: 'interactive' }); } catch { ctx = new AC(); }
+  try { ctx = new AC({ latencyHint: LATENCY }); } catch { ctx = new AC(); }
   build();
   apply();
   loadSamples();
@@ -49,20 +52,23 @@ function sample(kind, t, level, rate = 1, room = 0.1) {
 }
 // The mixing desk on the current context: buses, compressor, room, noise.
 function build() {
+  // A gentle limiter rather than a pumping compressor.
   const comp = ctx.createDynamicsCompressor();
-  comp.threshold.value = -16; comp.ratio.value = 4; comp.attack.value = 0.004; comp.release.value = 0.2;
+  comp.threshold.value = -8; comp.knee.value = 6; comp.ratio.value = 8; comp.attack.value = 0.003; comp.release.value = 0.12;
   master = ctx.createGain(); master.gain.value = 0.9;
   master.connect(comp); comp.connect(ctx.destination);
   // Effects pass a soft top cut: hits thud rather than crack.
   const soft = ctx.createBiquadFilter(); soft.type = 'lowpass'; soft.frequency.value = 4200; soft.Q.value = 0.5; soft.connect(master);
   sfxBus = ctx.createGain(); sfxBus.connect(soft);
   musicBus = ctx.createGain(); musicBus.gain.value = 0; musicBus.connect(master);
-  // A short room for the hits and a longer tail for the pads.
-  reverb = ctx.createConvolver();
-  const len = Math.floor(ctx.sampleRate * 1.6), ir = ctx.createBuffer(2, len, ctx.sampleRate);
-  for (let c = 0; c < 2; c++) { const d = ir.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3.2); }
-  reverb.buffer = ir;
-  const wet = ctx.createGain(); wet.gain.value = 0.32; reverb.connect(wet); wet.connect(master);
+  // A small room: a damped echo loop. (A convolution reverb sounded fuller
+  // but its CPU cost made phones underrun — the sound gurgled.)
+  reverb = ctx.createGain();
+  const delay = ctx.createDelay(0.2); delay.delayTime.value = 0.045;
+  const damp = ctx.createBiquadFilter(); damp.type = 'lowpass'; damp.frequency.value = 2400;
+  const feedback = ctx.createGain(); feedback.gain.value = 0.32;
+  reverb.connect(delay); delay.connect(damp); damp.connect(feedback); feedback.connect(delay);
+  const wet = ctx.createGain(); wet.gain.value = 0.35; damp.connect(wet); wet.connect(master);
   noise = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
   const n = noise.getChannelData(0); for (let i = 0; i < n.length; i++) n[i] = Math.random() * 2 - 1;
 }
@@ -229,13 +235,20 @@ function click(t) { const g = gain(sfxBus); env(g.gain, t, 0.06, 0.001, 0.03); o
 // Music steps back for a moment under a big blow.
 function duck(t, depth, len) {
   if (!musicBus || mode !== 'all') return;
-  const p = musicBus.gain; p.cancelScheduledValues(t); p.setValueAtTime(MUSIC * depth, t); p.linearRampToValueAtTime(MUSIC, t + len);
+  // Smooth both ways: a step in the gain clicks.
+  const p = musicBus.gain; p.cancelScheduledValues(t); p.setTargetAtTime(MUSIC * depth, t, 0.02); p.setTargetAtTime(MUSIC, t + 0.08, len / 3);
 }
 
 const effects = { blow, whoosh, block, parry, shatterGuard, slam, grab, crash, fall, knockout, beep, bell, jingle, click };
+// Effects sounding at once: past the cap new whooshes are dropped and
+// contact sounds still play (a phone's audio thread has a budget).
+const VOICES = 8;
+let voices = 0;
 export function play(name, opts = {}) {
   if (mode === 'off' || !init() || ctx.state !== 'running') return;
   const f = effects[name]; if (!f) return;
+  if (voices >= VOICES && (name === 'whoosh' || voices >= VOICES + 4)) return;
+  voices++; setTimeout(() => voices--, 600 + (opts.delay || 0) * 1000);
   // A little ahead of the clock, so envelopes are never scheduled in the past.
   const t = ctx.currentTime + 0.02 + (opts.delay || 0);
   try {

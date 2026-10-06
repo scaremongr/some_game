@@ -37,6 +37,15 @@ pub const WALK_SLOW: i32 = 12;
 /// After lowering the guard, raising it again within this many ticks blocks
 /// without the parry window: tapping the button is not a free parry.
 pub const PARRY_COOLDOWN: u32 = 18;
+/// Hit-stop (both fighters frozen, ticks): a light and a heavy hit, a
+/// counter hit adds a tick; a blocked blow, a parry, a grab or a broken
+/// throw. Short punctuation: on phones a longer stop read as the game hanging.
+pub const STOP_LIGHT: u32 = 5;
+pub const STOP_HEAVY: u32 = 8;
+pub const STOP_COUNTER: u32 = 1;
+pub const STOP_BLOCK: u32 = 3;
+pub const STOP_PARRY: u32 = 6;
+pub const STOP_GRAB: u32 = 5;
 /// A counter hit (a blow into the startup of the opponent's attack) stuns
 /// this much longer: room for a follow-up the plain hit does not give.
 pub const COUNTER_STUN: u32 = 12;
@@ -499,7 +508,7 @@ impl Match {
         self.event += 1;
         self.event_kind = 9;
         self.event_target = victim;
-        self.freeze = 6;
+        self.freeze = STOP_GRAB;
     }
     pub fn step(&mut self, inputs: [u32; 2]) {
         if self.phase == 3 {
@@ -787,7 +796,7 @@ impl Match {
             self.event += 1;
             self.event_kind = 8;
             self.event_target = side;
-            self.freeze = 6;
+            self.freeze = STOP_GRAB;
         }
         if let Some(victim) = tech {
             self.break_throw(victim);
@@ -889,7 +898,7 @@ impl Match {
                     self.fighters[side].action = 5;
                     self.fighters[side].frame = 0;
                     self.fighters[1 - side].meter = (d.meter + 100).min(1000);
-                    self.freeze = 8;
+                    self.freeze = STOP_PARRY;
                 } else {
                     let defender = &mut self.fighters[1 - side];
                     // Blocking costs stamina: long pressure can still break
@@ -905,7 +914,7 @@ impl Match {
                         defender.guard = false;
                         defender.action = 5;
                     }
-                    self.freeze = 5;
+                    self.freeze = STOP_BLOCK;
                 }
             } else {
                 // Chains are true only while the victim is still in hitstun/airborne.
@@ -990,12 +999,12 @@ impl Match {
                     1
                 };
                 self.freeze = if grab {
-                    6
+                    STOP_GRAB
                 } else if m.heavy() {
-                    11
+                    STOP_HEAVY
                 } else {
-                    7
-                } + if counter { 2 } else { 0 };
+                    STOP_LIGHT
+                } + if counter { STOP_COUNTER } else { 0 };
             }
         }
         // A held victim hangs in the thrower's grip (from the tick it is grabbed).
