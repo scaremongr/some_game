@@ -53,7 +53,7 @@ Principles:
 | `src/game/mocap.rs` | Fight pack format `PFP1` (body bones, i16 quats, 30 fps), sampling, `Marks`/`strike_marks`, `strike_limb`. |
 | `src/game/anims.rs`, `body.rs` | Authored key-pose animation + IK body solver: the fallback when a pack lacks a take. |
 | `src/game/ragdoll.rs` | Physical layer over the animated pose: 18 joint particles (hips pinned to the animation, the rest damped springs around it), blows push the struck part, root acceleration is felt as inertia, loose parts sag, bone lengths and the floor are kept; bones are turned to follow. `Drive` per state: full control normally, loose limbs in flight and knockdowns, limp after a KO. Cosmetic. |
-| `src/game/feet.rs` | Planted feet while standing still: each foot stays where a walk or strike left it; when the body has moved away (pushback, settling after a walk) it takes a short arcing step to where the stance wants it; two-bone IK with the animated knee plane, the hips sink so both legs reach. Cosmetic. |
+| `src/game/feet.rs` | Foot locking in every state on the ground (stance, guard, strikes, reactions, victory, dance; not walks, air, falls): a toe on the floor is locked where it touched down (the heel may rise), a lifted toe or a sweeping foot follows the animation and locks where it lands; a foot left 20 cm behind or out of the leg's reach takes a short arcing step. Two-bone IK bends each knee about its hinge axis (learned from the animation in the knee bone's frame) only the way it flexes; the hips sink so both legs reach. Cosmetic. |
 | `src/game/arena_props.rs` | The room: baked apartment from `assets/room.glb` (pieces `oNN_kkk` belong to combat room object NN; `glassNN_kkk` panes; `s_*` fixed) or a box-room fallback; deterministic debris from snapshot ticks. |
 | `src/game/timeline.rs`, `effects.rs`, `camera.rs` | Interpolation of snapshots, particles/sparks, camera. |
 | `src/game/scenery.rs` | Pictures from the page in the room: the night city behind the windows (two layers at different depths → parallax; a dark mask continues the back wall so the city shows only in the openings) and the photos on the TV, the laptop (follows the broken desk piece) and the two bedroom canvases. Screen rectangles were measured in Blender on the built room. |
@@ -161,8 +161,10 @@ Principles:
   24 mm/tick forward, 20 back, 12 guarded or crouched (`WALK_FORWARD/BACK/SLOW`
   in `combat`). The cycle keeps its captured (narrow) stride, so a faster
   walk steps quicker — a shuffle; wide stretched strides were rejected. A
-  guarded walk keeps the block arms; `feet.rs` plants the feet once the walk
-  stops.
+  guarded walk keeps the block arms; `feet.rs` locks the feet in every other
+  grounded state. Tests: `mashing_any_button_never_bends_a_knee_backwards`
+  (three fighters, both sides), `standing_feet_stay_put_through_strikes_
+  shoves_and_the_dance` (< 4 mm/frame for a standing toe).
 - Knockout: the body follows the simulation (which keeps falling and sliding
   through the round's end, `Match::settle`): a body in the air plays `air_hit`
   landing with the simulated body, then lies as `ko` ends (from its floor
@@ -318,7 +320,7 @@ npm ci
 python tools/fetch-assets.py                 # models + packs (not in git)
 .\build-web.ps1                              # -> dist/ (both wasm + web + assets)
 .\build-web.ps1 -Serve                       # + local dev server on :8080 (guest identities)
-cargo test --offline --lib                   # engine/game: 67 tests
+cargo test --offline --lib                   # engine/game: 69 tests
 cargo test --offline --manifest-path combat/Cargo.toml   # combat: 40 tests (incl. a 3x3 style matchup run)
 npm test                                     # server: 19 tests (node:test), incl. netcode at 60/200 ms RTT
 npm run test:browser; npm run test:combat; npm run test:physics   # Playwright, need dist/

@@ -17,7 +17,7 @@ await mkdir(outDir, { recursive: true });
 const app = await createArena({ dev: true });
 app.server.listen(0, '127.0.0.1'); await new Promise(r => app.server.once('listening', r));
 const browser = await chromium.launch({ headless: true, args: ['--enable-unsafe-swiftshader'] });
-const context = await browser.newContext({ viewport: { width: 960, height: 540 } });
+const context = await browser.newContext({ viewport: { width: Number(process.env.W || 960), height: Number(process.env.H || 540) } });
 if (process.env.FIGHTER) await context.addInitScript(id => { try { localStorage.setItem('pulse-fighter', id); } catch {} }, process.env.FIGHTER);
 // The manual clock: off until the fight starts, then every frame is one call.
 await context.addInitScript(() => {

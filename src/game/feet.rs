@@ -1,35 +1,49 @@
-//! Planted feet while a fighter stands still (stance, guard, crouch): each
-//! foot stays where it was put on the floor — where a walk or a strike left
-//! it — and when the body has moved away from it (pushed back by a blocked
-//! blow, settling after a walk) the foot takes a short arcing step to where
-//! the stance wants it, one foot at a time. The legs reach their feet with
-//! two-bone IK, the feet keep the animated angle. Walking itself is the
-//! captured cycle played by distance (fighter_model.rs). Cosmetic: the
+//! Foot locking. In every state on the ground (stance, guard, strikes,
+//! reactions, dances) a foot the animation puts down on the floor, and keeps
+//! still under the body, is locked where it touched down; the leg reaches it
+//! with two-bone IK while the animation and the simulation move the body
+//! over it. A foot the animation lifts or swings fast (a kick, a dance step)
+//! follows the animation and locks again where it lands. When the body has
+//! moved too far from a locked foot (a shove, a slide), the foot takes a
+//! short arcing step back under it. Knees only bend forward. Cosmetic: the
 //! simulation owns the body's position.
 use super::ragdoll::turn_bone;
 use crate::engine::{math3::*, skeleton::{Pose, Skeleton}};
+
+/// A toe this close to the floor (m) is down; above `LIFT` it is lifted.
+const DOWN: f32 = 0.035;
+const LIFT: f32 = 0.07;
+/// A locked foot is let go when the animation lifts it, or, in a sweep, when
+/// it drives along the floor faster than `SWEEP` (and then only a foot
+/// slower than `STILL`, m/s relative to the body, locks).
+const STILL: f32 = 0.9;
+const SWEEP: f32 = 2.0;
+/// A locked foot this far (m) from where the animation wants it steps.
+const DRIFT: f32 = 0.2;
+/// Seconds of a recovery step.
+const STEP: f32 = 0.16;
 
 #[derive(Clone, Copy)]
 struct Swing {
     from: Vec3,
     t: f32,
-    len: f32,
 }
 
 #[derive(Clone, Default)]
 pub struct Feet {
-    /// 0 when the animation owns the legs, 1 when the feet are planted.
-    weight: f32,
-    /// Where each foot (ankle) stands, in the room.
-    planted: [Vec3; 2],
+    /// Per foot: 0 when the animation owns it, 1 when it is locked.
+    pub(crate) weight: [f32; 2],
+    /// Where each locked foot's toe stands, in the room (the heel may rise).
+    pub(crate) locked: [Option<Vec3>; 2],
     swing: [Option<Swing>; 2],
-    /// Seconds a standing foot has been off its place.
-    restless: f32,
+    /// Last frame's animated ankle in body space, to tell a still foot.
+    last: Option<[Vec3; 2]>,
     root: Option<Vec3>,
-    /// Smoothed root velocity (m/s), to land steps ahead of a moving body.
-    velocity: Vec3,
     /// How far the hips sink so both legs reach their feet (m).
     sink: f32,
+    /// Each knee's hinge axis in the knee bone's own frame, learned from the
+    /// animation whenever it bends the knee (the way it flexes is positive).
+    hinge: [Option<Vec3>; 2],
 }
 
 impl Feet {
@@ -37,130 +51,167 @@ impl Feet {
         *self = Feet::default();
     }
 
-    /// Plants the feet of `pose` (hip, knee, ankle bones per leg; `hips` the
-    /// root of the body) when `standing`, otherwise lets go within a tenth of
-    /// a second. `body` maps model space into body space, `place` body space
+    /// Locks the feet of `pose` (hip, knee, ankle bones per leg, `toes` the
+    /// toe bones; `hips` the root of the body) while `grounded`, otherwise
+    /// lets go within a tenth of a second; `sweeping`: a foot may drive along
+    /// the floor. `body` maps model space into body space, `place` body space
     /// into the room.
     #[allow(clippy::too_many_arguments)]
     pub fn apply(
         &mut self,
         hips: usize,
         legs: [[usize; 3]; 2],
+        toes: [usize; 2],
         skeleton: &Skeleton,
         pose: &mut Pose,
         globals: &mut Vec<Mat4>,
         body: Mat4,
         place: Mat4,
-        standing: bool,
+        grounded: bool,
+        sweeping: bool,
         dt: f32,
     ) {
         let root = place.transform_point(Vec3::ZERO);
-        if let Some(last) = self.root {
-            if (root - last).length() > 0.8 {
-                // A teleport (a new round): start over.
-                self.reset();
-            } else if dt > 0.0 {
-                let measured = (root - last) * (1.0 / dt);
-                self.velocity = self.velocity + (measured - self.velocity) * (1.0 - (-dt / 0.08).exp());
-            }
+        if self.root.is_some_and(|last| (root - last).length() > 0.8) {
+            // A teleport (a new round): start over.
+            self.reset();
         }
         self.root = Some(root);
         skeleton.global_matrices(pose, globals);
-        let world = place * body;
-        let ankle = |globals: &Vec<Mat4>, leg: usize| world.transform_point(globals[legs[leg][2]].transform_point(Vec3::ZERO));
-        let home = [ankle(globals, 0), ankle(globals, 1)];
-        if !standing {
-            self.weight = (self.weight - dt * 10.0).max(0.0);
-            self.swing = [None, None];
-            if self.weight <= 0.0 {
-                return;
+        let in_body = |globals: &Vec<Mat4>, bone: usize| body.transform_point(globals[bone].transform_point(Vec3::ZERO));
+        let toes_body = [in_body(globals, toes[0]), in_body(globals, toes[1])];
+        let ankles = [in_body(globals, legs[0][2]), in_body(globals, legs[1][2])];
+        // The animated toe in the room and the ankle's offset from it.
+        let home = [place.transform_point(toes_body[0]), place.transform_point(toes_body[1])];
+        let heel = [0, 1].map(|i| place.transform_direction(ankles[i] - toes_body[i]));
+        let toe_y = [home[0].y, home[1].y];
+        let speed = match (self.last, dt > 0.0) {
+            (Some(last), true) => [0, 1].map(|i| {
+                let d = toes_body[i] - last[i];
+                (d.x * d.x + d.z * d.z).sqrt() / dt
+            }),
+            _ => [0.0; 2],
+        };
+        self.last = Some(toes_body);
+        // Learn the knee hinges from the animated bends.
+        for i in 0..2 {
+            let [up, knee, foot] = legs[i];
+            let (hip, k, a) = (in_body(globals, up), in_body(globals, knee), in_body(globals, foot));
+            let bend = (k - hip).normalize().cross((a - k).normalize());
+            if bend.length() > 0.3 {
+                let frame = Quat::from_matrix(body * globals[knee]);
+                self.hinge[i] = Some(frame.conjugate().rotate(bend.normalize()));
             }
-        } else {
-            if self.weight <= 0.0 {
-                self.planted = home;
-                self.swing = [None, None];
-                self.restless = 0.0;
+        }
+        let fade = (dt / 0.1).min(1.0);
+        for i in 0..2 {
+            // A foot on the floor locks (one the animation shuffles along it
+            // too: it then steps); in a sweep only a still one does.
+            let down = toe_y[i] < DOWN && (!sweeping || speed[i] < STILL);
+            let lifted = toe_y[i] > LIFT || (sweeping && speed[i] > SWEEP);
+            if !grounded || lifted {
+                // The animation takes the foot (and lifts it).
+                self.swing[i] = None;
+                self.weight[i] = (self.weight[i] - fade).max(0.0);
+                if self.weight[i] <= 0.0 {
+                    self.locked[i] = None;
+                }
+                continue;
             }
-            self.weight = (self.weight + dt * 10.0).min(1.0);
-            self.step(home, dt);
+            if self.locked[i].is_none() || self.weight[i] < 1.0 {
+                if !down {
+                    // Still letting go after a lift.
+                    self.weight[i] = (self.weight[i] - fade).max(0.0);
+                    if self.weight[i] <= 0.0 {
+                        self.locked[i] = None;
+                    }
+                    continue;
+                }
+                // Touchdown: lock where the foot is shown now, at once (it is
+                // there already, so nothing jumps).
+                let shown = match self.locked[i] {
+                    Some(at) => home[i].lerp(at, self.weight[i]),
+                    None => home[i],
+                };
+                self.locked[i] = Some(vec3(shown.x, home[i].y, shown.z));
+                self.weight[i] = 1.0;
+            }
+        }
+        // A leg that cannot reach its locked foot without straightening
+        // fully steps instead of stretching like a stilt.
+        let stretched = [0, 1].map(|i| match self.locked[i] {
+            Some(at) if self.swing[i].is_none() => {
+                let [up, knee, foot] = legs[i];
+                let hip = place.transform_point(in_body(globals, up));
+                let length = (in_body(globals, knee) - in_body(globals, up)).length() + (in_body(globals, foot) - in_body(globals, knee)).length();
+                (at + heel[i] - hip).length() > length * 0.97
+            }
+            _ => false,
+        });
+        self.step(home, stretched, dt);
+        if self.weight.iter().all(|w| *w <= 0.0) {
+            self.sink *= (1.0 - dt * 12.0).max(0.0);
+            return;
         }
 
-        // Where each foot is now: planted, or along its step.
-        let speed = self.velocity.x.abs();
-        let lift = 0.05 + 0.04 * (speed / 1.6).min(1.0);
-        let mut feet = self.planted;
+        // Where each foot is now: locked, or along its step.
+        let mut feet = home;
         for i in 0..2 {
-            if let Some(s) = self.swing[i] {
-                let u = (s.t / s.len).clamp(0.0, 1.0);
-                let to = self.landing(home[i], s);
-                let e = u * u * (3.0 - 2.0 * u);
-                feet[i] = s.from.lerp(to, e) + vec3(0.0, lift * (u * std::f32::consts::PI).sin(), 0.0);
-            }
+            let Some(at) = self.locked[i] else { continue };
+            feet[i] = match self.swing[i] {
+                Some(s) => {
+                    let u = (s.t / STEP).clamp(0.0, 1.0);
+                    let e = u * u * (3.0 - 2.0 * u);
+                    s.from.lerp(home[i], e) + vec3(0.0, 0.07 * (u * std::f32::consts::PI).sin(), 0.0)
+                }
+                None => at,
+            };
         }
         // The legs reach for them (in body space); the hips sink just
         // enough for both legs to get there.
         let to_model = body.invert();
         let to_body = place.invert();
-        let targets = [0, 1].map(|i| to_body.transform_point(home[i].lerp(feet[i], self.weight)));
-        let sink = sink_needed(globals, body, legs, targets) * self.weight;
+        let targets = [0, 1].map(|i| to_body.transform_point(home[i].lerp(feet[i], self.weight[i]) + heel[i]));
+        let sink = sink_needed(globals, body, legs, targets);
         // Sinks at once when a leg needs it (a foot never slides for want of
         // reach), rises back gently.
         self.sink = if sink > self.sink { sink } else { self.sink + (sink - self.sink) * (1.0 - (-dt * 12.0).exp()) };
         lower_hips(skeleton, pose, globals, to_model, hips, self.sink);
         for i in 0..2 {
-            reach(skeleton, pose, globals, body, to_model, legs[i], targets[i]);
+            if self.weight[i] > 0.0 {
+                reach(skeleton, pose, globals, body, to_model, legs[i], self.hinge[i], targets[i]);
+            }
         }
     }
 
-    /// Where a step lands: the foot's place, ahead of a moving body by the
-    /// rest of the step and half the time it will stand there, so it stands
-    /// centred under its place.
-    fn landing(&self, home: Vec3, s: Swing) -> Vec3 {
-        let ahead = self.velocity * ((s.len - s.t).max(0.0) + s.len * 0.5);
-        vec3(home.x + ahead.x, home.y, home.z)
-    }
-
-    fn step(&mut self, home: [Vec3; 2], dt: f32) {
-        let speed = self.velocity.x.abs();
-        // Short quick steps keep the stance: a fighter shuffles, never
-        // brings the feet together.
-        let len = (0.22 - 0.03 * speed).clamp(0.16, 0.22);
-        // Steps in flight move on; a finished one plants the foot.
+    /// A locked foot left too far behind (or ahead), or out of the leg's
+    /// reach (`stretched`), steps back under the body, one foot at a time; a
+    /// finished step locks it there.
+    fn step(&mut self, home: [Vec3; 2], stretched: [bool; 2], dt: f32) {
         for i in 0..2 {
             if let Some(mut s) = self.swing[i] {
                 s.t += dt;
-                if s.t >= s.len {
-                    self.planted[i] = self.landing(home[i], s);
+                if s.t >= STEP {
+                    self.locked[i] = Some(home[i]);
                     self.swing[i] = None;
                 } else {
                     self.swing[i] = Some(s);
                 }
             }
         }
-        let off = |i: usize| {
-            let d = home[i] - self.planted[i];
-            (d.x * d.x + d.z * d.z).sqrt()
-        };
-        let moving = speed > 0.2;
-        let worst = off(0).max(off(1));
-        self.restless = if worst > 0.05 { self.restless + dt } else { 0.0 };
-        let threshold = if moving { 0.03 + 0.5 * speed * len } else { 0.05 };
-        let swinging = self.swing.iter().filter(|s| s.is_some()).count();
-        // One foot at a time, unless the body is running away from both.
-        let allowed = swinging == 0 || (swinging == 1 && worst > 0.5);
-        if !allowed || worst < threshold || (!moving && self.restless < 0.15) {
+        if self.swing.iter().any(|s| s.is_some()) {
             return;
         }
-        // The foot that leads the way goes first; standing, the worst placed.
-        let lead = |i: usize| home[i].x * self.velocity.x.signum();
-        let pick = (0..2)
-            .filter(|&i| self.swing[i].is_none() && off(i) >= threshold * 0.8)
-            .max_by(|&a, &b| {
-                let score = |i: usize| if moving { lead(i) + off(i) * 0.5 } else { off(i) };
-                score(a).total_cmp(&score(b))
-            });
+        let off = |i: usize| match self.locked[i] {
+            Some(at) if self.weight[i] >= 1.0 => {
+                let d = home[i] - at;
+                (d.x * d.x + d.z * d.z).sqrt() + if stretched[i] { DRIFT } else { 0.0 }
+            }
+            _ => 0.0,
+        };
+        let pick = (0..2).filter(|&i| off(i) > DRIFT).max_by(|&a, &b| off(a).total_cmp(&off(b)));
         if let Some(i) = pick {
-            self.swing[i] = Some(Swing { from: self.planted[i], t: 0.0, len });
+            self.swing[i] = Some(Swing { from: self.locked[i].unwrap(), t: 0.0 });
         }
     }
 }
@@ -192,11 +243,13 @@ fn lower_hips(skeleton: &Skeleton, pose: &mut Pose, globals: &mut Vec<Mat4>, to_
 }
 
 /// Two-bone IK: turns the hip and knee of `leg` so the ankle reaches
-/// `target` (body space), keeping the knee in its animated plane and the
-/// foot at its animated angle.
-fn reach(skeleton: &Skeleton, pose: &mut Pose, globals: &mut Vec<Mat4>, body: Mat4, to_model: Mat4, leg: [usize; 3], target: Vec3) {
+/// `target` (body space), the knee bending about its hinge (`hinge`, in the
+/// knee bone's frame) only the way it flexes, the foot at its animated angle.
+#[allow(clippy::too_many_arguments)]
+fn reach(skeleton: &Skeleton, pose: &mut Pose, globals: &mut Vec<Mat4>, body: Mat4, to_model: Mat4, leg: [usize; 3], hinge: Option<Vec3>, target: Vec3) {
     let [up, knee, foot] = leg;
     let at = |globals: &Vec<Mat4>, bone: usize| body.transform_point(globals[bone].transform_point(Vec3::ZERO));
+    let axis = hinge.map(|h| Quat::from_matrix(body * globals[knee]).rotate(h));
     let foot_angle = Quat::from_matrix(globals[foot]);
     let (hip, k, a) = (at(globals, up), at(globals, knee), at(globals, foot));
     let (upper, lower) = ((k - hip).length(), (a - k).length());
@@ -206,13 +259,16 @@ fn reach(skeleton: &Skeleton, pose: &mut Pose, globals: &mut Vec<Mat4>, body: Ma
     }
     let dir = to.normalize();
     let reach = to.length().clamp((upper - lower).abs() + 1e-3, upper + lower - 1e-3);
-    // The knee bends where the animation bends it.
+    // The knee bends about its hinge, the way it flexes (a pole of
+    // dir x axis gives a positive flexion about the axis); before the hinge
+    // is known, where the animation bends it.
     let bend = k - hip;
-    let mut pole = bend - dir * bend.dot(dir);
-    if pole.length() < 1e-4 {
-        pole = vec3(0.0, 0.0, 1.0);
-    }
-    let pole = pole.normalize();
+    let anim = bend - dir * bend.dot(dir);
+    let pole = match axis.map(|a| dir.cross(a)).filter(|p| p.length() > 0.1) {
+        Some(p) => p.normalize(),
+        None if anim.length() > 1e-3 => anim.normalize(),
+        None => vec3(0.0, 0.0, 1.0),
+    };
     let cos = ((upper * upper + reach * reach - lower * lower) / (2.0 * upper * reach)).clamp(-1.0, 1.0);
     let knee_at = hip + dir * (upper * cos) + pole * (upper * (1.0 - cos * cos).sqrt());
     turn_bone(skeleton, pose, globals, body, to_model, up, Quat::from_rotation_arc(k - hip, knee_at - hip), hip);
@@ -231,10 +287,12 @@ mod tests {
     use crate::game::{dancer::Character, ragdoll::RagdollRig};
 
     #[test]
-    fn walking_feet_never_slide_and_the_legs_reach_them() {
+    fn a_body_pushed_over_locked_feet_steps_and_never_slides() {
         let c = Character::from_model(gltf::load_glb(&std::fs::read("assets/character.glb").unwrap()).unwrap());
         let rig = RagdollRig::new(&c.skeleton).unwrap();
         let legs = [rig.leg(0), rig.leg(1)];
+        let find = |n: &str| c.skeleton.bones.iter().position(|b| b.name.ends_with(n)).unwrap();
+        let (hips, toes) = (find("Hips"), [find("LeftToeBase"), find("RightToeBase")]);
         let rest = c.skeleton.rest_pose();
         let mut globals = Vec::new();
         let mut feet = Feet::default();
@@ -245,21 +303,19 @@ mod tests {
         let mut previous: Option<[Vec3; 2]> = None;
         let mut steps = 0;
         let mut planted_before = [true; 2];
-        // Walk forward at the game's speed (26 mm/tick) for two seconds.
+        // Shoved along at 1 m/s for two seconds, the stance as animated.
         for frame in 0..120 {
-            let x = frame as f32 * 0.026;
+            let x = frame as f32 * 0.017;
             let place = Mat4::translation(vec3(x, 0.0, 0.0));
             let mut pose = rest.clone();
-            let hips = c.skeleton.bones.iter().position(|b| b.name.ends_with("Hips")).unwrap();
-            feet.apply(hips, legs, &c.skeleton, &mut pose, &mut globals, c.transform, place, true, 1.0 / 60.0);
+            feet.apply(hips, legs, toes, &c.skeleton, &mut pose, &mut globals, c.transform, place, true, false, 1.0 / 60.0);
             let now = [ankle(&pose, &mut globals, place, 0), ankle(&pose, &mut globals, place, 1)];
             for i in 0..2 {
-                let planted = feet.swing[i].is_none();
+                let planted = feet.swing[i].is_none() && feet.weight[i] >= 1.0;
                 if planted && !planted_before[i] {
                     steps += 1;
                 }
-                // After the first tenth of a second the feet own the legs.
-                if let (true, true, Some(p), true) = (planted, planted_before[i], previous, frame > 6) {
+                if let (true, true, Some(p)) = (planted, planted_before[i], previous) {
                     let slide = (now[i] - p[i]).length();
                     assert!(slide < 0.004, "foot {i} slid {slide} m at frame {frame}");
                 }
@@ -267,6 +323,6 @@ mod tests {
             }
             previous = Some(now);
         }
-        assert!(steps >= 6, "only {steps} steps in two seconds of walking");
+        assert!(steps >= 4, "only {steps} recovery steps");
     }
 }

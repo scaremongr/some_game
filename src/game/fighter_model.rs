@@ -282,7 +282,7 @@ struct Side {
     /// Physical secondary motion over the animated pose.
     ragdoll: Ragdoll,
     /// Feet planted on the floor while standing and walking.
-    feet: Feet,
+    pub(crate) feet: Feet,
     /// Room directions into this body's space (placement without the origin).
     to_body: Mat4,
     /// Dancing: which take of `DANCES` plays, since when (clip time), and
@@ -1524,18 +1524,35 @@ impl FighterModel {
             let rotation = Mat4::from_trs(Vec3::ZERO, Quat::IDENTITY, vec3(flip, 1.0, 1.0))
                 * Mat4::from_trs(Vec3::ZERO, Quat::from_axis_angle(Vec3::Y, yaw), vec3(1.0, 1.0, 1.0));
             s.to_body = rotation.invert();
-            // Feet planted on the floor while standing still.
-            let standing = grounded_neutral && captured_pose.is_some() && !walking && s.walk_weight < 0.5;
+            // Feet locked to the floor in every state on the ground (a walk
+            // plays by distance and keeps its own feet).
+            let grounded = captured_pose.is_some()
+                && body.y < 0.01
+                && !(walking || s.walk_weight > 0.5)
+                && matches!(
+                    clip,
+                    Clip::Idle
+                        | Clip::Guard
+                        | Clip::Crouch
+                        | Clip::CrouchGuard
+                        | Clip::Dash(_)
+                        | Clip::React(_)
+                        | Clip::Victory
+                        | Clip::Defeat
+                        | Clip::Dance
+                ) || matches!(clip, Clip::Attack(a) if a != 13 && body.y < 0.01 && captured_pose.is_some());
             match (&av.ragdoll, view.preview) {
                 (Some(rig), false) => s.feet.apply(
                     av.hips,
                     [rig.leg(0), rig.leg(1)],
+                    [av.bones[2], av.bones[3]],
                     &av.character.skeleton,
                     &mut self.pose,
                     &mut self.globals[side],
                     av.character.transform,
                     Mat4::translation(root) * rotation,
-                    standing,
+                    grounded,
+                    matches!(clip, Clip::Attack(9 | 16)),
                     dt,
                 ),
                 _ => s.feet.reset(),
@@ -1805,6 +1822,137 @@ mod tests {
             assert!(steps >= 3, "{label}: only {steps} steps in three seconds");
             assert!(worst < 0.004, "{label}: a standing foot slides {worst} m per frame");
         }
+    }
+    /// Signed knee flexion of each leg of `side`: negative bends forward,
+    /// positive is a knee bent backwards.
+    fn knee_flexion(model: &FighterModel, side: usize) -> [f32; 2] {
+        let legs = {
+            let r = model.avatar(side).ragdoll.as_ref().unwrap();
+            [r.leg(0), r.leg(1)]
+        };
+        let w = |bone: usize| model.bone_world(side, bone);
+        let lateral = (w(legs[1][0]) - w(legs[0][0])).normalize();
+        legs.map(|leg| {
+            let (th, sh) = ((w(leg[1]) - w(leg[0])).normalize(), (w(leg[2]) - w(leg[1])).normalize());
+            let flex = th.cross(sh).dot(lateral).atan2(th.dot(sh)).to_degrees();
+            if side == 1 { -flex } else { flex }
+        })
+    }
+
+    /// Runs the simulation with `input(tick, match)` for one side and poses
+    /// both every tick; calls `look(model, match)` after each.
+    fn play(model: &mut FighterModel, ticks: u32, mut input: impl FnMut(u32, &arena_combat::Match) -> [u32; 2], mut look: impl FnMut(&FighterModel, &arena_combat::Match)) {
+        model.sides = [Side::new(), Side::new()];
+        let mut game = arena_combat::Match::new(3);
+        game.phase = 1;
+        game.fighters[0].x = -1500;
+        game.fighters[1].x = 1500;
+        let mut v = view();
+        for t in 0..ticks {
+            let inputs = input(t, &game);
+            game.step(inputs);
+            v.time = t as f32 / 60.0;
+            v.phase = game.phase;
+            v.winner = game.winner;
+            v.phase_time += 1.0 / 60.0;
+            let f = &game.fighters;
+            let b = [0, 1].map(|i| Body { x: f[i].x as f32 / 1000.0, y: f[i].y as f32 / 1000.0, vy: f[i].vy as f32, frame: f[i].frame as f32 });
+            model.update(&game.fighters, &b, &v);
+            look(model, &game);
+        }
+    }
+
+    #[test]
+    fn mashing_any_button_never_bends_a_knee_backwards() {
+        use arena_combat::{CROUCH, HEAVY, KICK, LIGHT};
+        for (glb, pack) in [
+            ("assets/character.glb", "assets/fight.pack"),
+            ("assets/fighters/ninja.glb", "assets/fighters/ninja.pack"),
+            ("assets/fighters/kachujin.glb", "assets/fighters/kachujin.pack"),
+        ] {
+            let (Ok(glb), Ok(pack)) = (std::fs::read(glb), std::fs::read(pack)) else { continue };
+            let mut model = FighterModel::load(&glb).unwrap();
+            model.set_captured(0, &pack).unwrap();
+            for button in [KICK, HEAVY, LIGHT, CROUCH | KICK, CROUCH | LIGHT] {
+                for side in 0..2 {
+                    let mut worst: f32 = 0.0;
+                    play(&mut model, 420, |t, _| {
+                        let mut i = [0, 0];
+                        i[side] = if t % 7 < 2 { button } else { button & CROUCH };
+                        i
+                    }, |m, _| worst = worst.max(knee_flexion(m, side)[0]).max(knee_flexion(m, side)[1]));
+                    assert!(worst < 8.0, "button {button} side {side}: a knee bent {worst} degrees backwards");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn standing_feet_stay_put_through_strikes_shoves_and_the_dance() {
+        let Ok(pack) = std::fs::read("assets/fight.pack") else { return };
+        let mut model = FighterModel::load(&std::fs::read("assets/character.glb").unwrap()).unwrap();
+        model.set_captured(0, &pack).unwrap();
+        use arena_combat::{BLOCK, HEAVY, KICK, LIGHT};
+        let cases: [(&str, u32); 2] = [("strikes", 0), ("blocked blows", 1)];
+        for (label, case) in cases {
+            let mut track: Vec<[Vec3; 2]> = vec![];
+            play(&mut model, 400, |t, g| match case {
+                0 => [[LIGHT, KICK, HEAVY, 0][(t / 25 % 4) as usize] * u32::from(t % 25 < 2), 0],
+                _ => {
+                    // The right side guards a stream of blows from close by.
+                    let near = (g.fighters[1].x - g.fighters[0].x) > 1100;
+                    [if near { 2 } else if t % 20 < 2 { LIGHT } else { 0 }, BLOCK]
+                }
+            }, |m, _| {
+                let side = if case == 1 { 1 } else { 0 };
+                let toes = m.avatar(side).bones;
+                track.push([m.bone_world(side, toes[2]), m.bone_world(side, toes[3])]);
+            });
+            assert_feet_stay(label, &track);
+        }
+        // The winner's dance: feet stay where they step.
+        model.sides = [Side::new(), Side::new()];
+        let mut game = arena_combat::Match::default();
+        game.phase = 3;
+        game.winner = 0;
+        game.fighters[1].hp = 0;
+        let mut v = view();
+        v.phase = 3;
+        v.winner = 0;
+        let mut track = vec![];
+        for t in 0..900 {
+            v.time = t as f32 / 60.0;
+            v.phase_time = v.time;
+            model.update(&game.fighters, &bodies(&game.fighters, 0.0), &v);
+            if v.phase_time > DANCE_AFTER + 1.0 {
+                let toes = model.avatars[0].bones;
+                track.push([model.bone_world(0, toes[2]), model.bone_world(0, toes[3])]);
+            }
+        }
+        assert_feet_stay("dance", &track);
+    }
+
+    fn assert_feet_stay(label: &str, track: &[[Vec3; 2]]) {
+        let (mut worst, mut planted) = (0.0f32, 0);
+        for i in 0..2 {
+            let mut run = vec![];
+            for (f, feet) in track.iter().enumerate().skip(10) {
+                if feet[i].y < 0.02 {
+                    run.push(f);
+                    continue;
+                }
+                if run.len() >= 8 {
+                    for w in run[3..run.len() - 3].windows(2) {
+                        worst = worst.max((track[w[1]][i].x - track[w[0]][i].x).abs());
+                        planted += 1;
+                    }
+                }
+                run.clear();
+            }
+        }
+        eprintln!("{label}: worst slide of a standing toe {:.1} mm/frame over {planted} frames", worst * 1000.0);
+        assert!(planted > 40, "{label}: feet never stand");
+        assert!(worst < 0.004, "{label}: a standing foot slides {worst} m per frame");
     }
     #[test]
     fn two_different_fighters_pose_every_state() {
