@@ -312,8 +312,15 @@ function screen(next) {
 
 // ---- Screen, safe areas, orientation --------------------------------------
 function inset(name) { return (tg?.safeAreaInset?.[name] || 0) + (tg?.contentSafeAreaInset?.[name] || 0); }
+// Telegram's stable height only on phones (it hides the expand animation and
+// the keyboard). Telegram Desktop sends it once, stale or in device pixels,
+// and telegram-web-app.js then stops following the window: the canvas came
+// out half the window high or taller than it (the scene shifted down).
+function screenHeight() {
+  return (/^(ios|android)/.test(tg?.platform || '') && tg.viewportStableHeight) || innerHeight;
+}
 function viewport() {
-  const h = tg?.viewportStableHeight || innerHeight, w = innerWidth;
+  const h = screenHeight(), w = innerWidth;
   const canvas = $('glcanvas'); canvas.style.width = w + 'px'; canvas.style.height = h + 'px'; document.body.style.height = h + 'px';
   const root = document.documentElement.style;
   for (const [name, css] of [['top', '--tg-top'], ['bottom', '--tg-bottom'], ['left', '--tg-left'], ['right', '--tg-right']]) root.setProperty(css, inset(name) + 'px');
@@ -333,7 +340,12 @@ function layout() {
     const card = document.querySelector('.play-card').getBoundingClientRect(), intro = document.querySelector('.intro').getBoundingClientRect();
     const bar = document.querySelector('.topbar').getBoundingClientRect();
     if (h > w) { top = (intro.bottom + 2) / h; bottom = (card.top - 16) / h; }
-    else { top = (bar.bottom + 2) / h; bottom = Math.min(0.97, (intro.top - 2) / h + 0.12); right = Math.max(0.45, (card.left - 8) / w); }
+    else {
+      top = (bar.bottom + 2) / h; right = Math.max(0.45, (card.left - 8) / w);
+      // Phones put the headline at the bottom; desktops at the top, and the
+      // fighters then take the whole height under the bar.
+      bottom = intro.top > h * 0.5 ? Math.min(0.97, (intro.top - 2) / h + 0.12) : 0.95;
+    }
   }
   if (fighting()) {
     top = ($('hud').getBoundingClientRect().bottom + 6) / h;
@@ -789,6 +801,9 @@ try {
   }
   viewport(); window.addEventListener('resize', viewport); window.visualViewport?.addEventListener('resize', viewport);
   window.screen.orientation?.addEventListener?.('change', viewport); document.addEventListener('fullscreenchange', viewport);
+  // Moving the window to another monitor or zooming changes the pixel ratio without a resize.
+  const dprWatch = () => matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener('change', () => { viewport(); dprWatch(); }, { once: true });
+  dprWatch();
   const [bytes, cfg] = await Promise.all([fetch('arena_combat.wasm').then(r => { if (!r.ok) throw Error('Нет боевого ядра. Запустите build-web.ps1.'); return r.arrayBuffer(); }), fetch('config.json').then(r => r.ok ? r.json() : config).catch(() => config)]);
   config = cfg; module = await WebAssembly.compile(bytes); accept(simulation(module).state());
   loadCity();

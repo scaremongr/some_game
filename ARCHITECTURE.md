@@ -107,6 +107,12 @@ Principles:
 - **Input**: bits (see PROTOCOL) from keyboard, floating joystick
   (double flick = dash), diamond pad; edge bits latched until a tick.
 - Portrait and landscape layouts; Telegram fullscreen (Bot API 8.0).
+- **Screen height** (`screenHeight()` in `arena.js`): `innerHeight`; Telegram's
+  `viewportStableHeight` only on `ios`/`android` clients. Telegram Desktop sends
+  it once, stale or in device pixels, and `telegram-web-app.js` then stops
+  following window resizes: the canvas came out half the window or taller than
+  it. The desktop lobby (headline at the top) frames the fighters over the whole
+  height left of the card; phone landscape keeps them above the headline.
 
 ## 4. Rendering and animation details
 
