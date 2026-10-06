@@ -113,6 +113,12 @@ Principles:
   following window resizes: the canvas came out half the window or taller than
   it. The desktop lobby (headline at the top) frames the fighters over the whole
   height left of the card; phone landscape keeps them above the headline.
+- **Telegram Desktop fullscreen launch**: opened straight into fullscreen, its
+  panel window gets the screen's size but stays where Windows put it (shifted
+  right/down, following the Telegram window; lib_ui `SeparatePanel::initGeometry`
+  skips placement in fullscreen). On `tdesktop` the page leaves and re-enters
+  fullscreen once at start; the window then lands at the monitor's origin
+  (measured with `GetWindowRect`, mixed 150 %/125 % monitors).
 
 ## 4. Rendering and animation details
 

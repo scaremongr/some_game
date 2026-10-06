@@ -798,6 +798,15 @@ try {
     tg.setHeaderColor?.('#080e18'); tg.setBackgroundColor?.('#080e18'); tg.BackButton?.onClick(home);
     for (const e of ['viewportChanged', 'safeAreaChanged', 'contentSafeAreaChanged', 'fullscreenChanged']) tg.onEvent?.(e, viewport);
     tg.onEvent?.('fullscreenFailed', () => toast('Полноэкранный режим недоступен в этой версии Telegram.'));
+    // Telegram Desktop opening a Mini App straight into fullscreen never
+    // places the window: it gets the screen's size at wherever Windows put
+    // it (shifted right and down, following the Telegram window). Leaving
+    // and re-entering fullscreen on the shown window puts it at the origin.
+    if (tg.platform === 'tdesktop' && tg.isFullscreen && tg.isVersionAtLeast?.('8.0')) {
+      let replace = true;
+      tg.onEvent('fullscreenChanged', () => { if (replace && !tg.isFullscreen) { replace = false; setTimeout(() => tg.requestFullscreen(), 120); } });
+      setTimeout(() => tg.exitFullscreen(), 200);
+    }
   }
   viewport(); window.addEventListener('resize', viewport); window.visualViewport?.addEventListener('resize', viewport);
   window.screen.orientation?.addEventListener?.('change', viewport); document.addEventListener('fullscreenchange', viewport);
