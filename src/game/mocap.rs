@@ -238,8 +238,14 @@ impl MocapLib {
 /// rises (uppercut) rather than reaching forward.
 pub fn strike_limb(key: &str) -> Option<(usize, bool)> {
     match key {
-        "air_kick" => return Some((6, false)),
+        "air_kick" | "air_flip" | "butterfly" | "hurricane" | "advance_kick" => return Some((6, false)),
+        // The bicycle kick lands its first kick with the right foot.
+        "air_bicycle" => return Some((4, false)),
         "throw" => return Some((5, false)),
+        // Forward + J swings a long lead hook; the rear uppercut drives forward.
+        "lunge_hook" => return Some((1, false)),
+        "rear_uppercut" => return Some((2, false)),
+        "thrust" => return Some((4, false)),
         _ => {}
     }
     match key.split('_').next().unwrap_or(key) {

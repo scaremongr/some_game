@@ -9,7 +9,7 @@ const STEP = 1000 / 60;
 // Online rendering trails the newest snapshot by ~one snapshot interval so it
 // can interpolate instead of stepping at 20 Hz.
 const NET_DELAY = 3.5;
-const BIT = { LEFT: 1, RIGHT: 2, BLOCK: 4, LIGHT: 8, HEAVY: 16, DASH: 32, THROW: 64, KICK: 128, CROUCH: 256, JUMP: 512, SPECIAL: 1024, SMASH: 2048 };
+const BIT = { LEFT: 1, RIGHT: 2, BLOCK: 4, LIGHT: 8, HEAVY: 16, DASH: 32, THROW: 64, KICK: 128, CROUCH: 256, JUMP: 512, SPECIAL: 1024, SMASH: 2048, RUN: 4096 };
 const EDGE = 3832;
 const panels = ['lobby', 'waiting', 'hud', 'controls', 'fight-tools', 'fight-tip', 'result'];
 let module, local, state, mode = 'lobby', side = 0, socket, authenticated = false, connecting;
@@ -391,8 +391,8 @@ let matchesPlayed = 0;
 function pickMusic() { sfx.music(fighting() ? 'fight' + (1 + (matchesPlayed + 2) % 3) : 'lobby'); }
 // What the last state sounded like: each new event makes its sound once.
 let heard = null;
-const HEAVY = new Set([2, 9, 10, 12, 13, 14, 18, 19]), MEDIUM = new Set([8, 11, 16, 17]);
-const ATTACKS = new Set([1, 2, 4, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18, 19]);
+const HEAVY = new Set([2, 9, 10, 12, 13, 14, 18, 19, 21, 26, 27]), MEDIUM = new Set([8, 11, 16, 17, 22, 23, 24, 25]);
+const ATTACKS = new Set([1, 2, 4, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]);
 const weightOf = action => HEAVY.has(action) ? 0.85 : MEDIUM.has(action) ? 0.55 : 0.3;
 // Sounds follow the picture: online it trails the newest snapshot.
 const soundDelay = () => mode === 'online' && !net ? NET_DELAY / 60 : 0.015;
@@ -661,14 +661,21 @@ function showPressed() {
   relabel();
 }
 // The pad says what a press will do now: crouching turns the attacks into
-// the low set, a grabbed fighter is told to break free, a full bar escapes.
+// the low set, the stick toward or away from the opponent into the command
+// moves, a jump into the jump attacks; a grabbed fighter is told to break
+// free, a full bar escapes.
 function relabel() {
   const mine = state?.fighters?.[side];
-  const low = !!(bits & BIT.CROUCH) && !(mine?.y > 0);
+  const air = mine?.y > 0, low = !!(bits & BIT.CROUCH) && !air;
+  const toward = mine?.facing < 0 ? BIT.LEFT : BIT.RIGHT, away = (BIT.LEFT | BIT.RIGHT) ^ toward;
+  const idle = !mine || mine.action === 0;
+  const fwd = !low && !air && idle && !!(bits & toward) && !(bits & away);
+  const back = !low && !air && idle && !!(bits & away) && !(bits & toward);
   for (const b of document.querySelectorAll('#pad .act')) {
     const span = b.firstElementChild; if (!span) continue;
     const base = b.dataset.name ||= span.textContent;
-    const next = (low && b.dataset.low) || (mine?.held > 0 && b.dataset.held) || (b.dataset.breaker && breakerReady() && b.dataset.breaker) || base;
+    const next = (low && b.dataset.low) || (mine?.held > 0 && b.dataset.held) || (b.dataset.breaker && breakerReady() && b.dataset.breaker)
+      || (air && b.dataset.air) || (fwd && b.dataset.fwd) || (back && b.dataset.back) || base;
     if (span.textContent !== next) span.textContent = next;
     b.classList.toggle('alt', next !== base);
   }
@@ -682,13 +689,20 @@ function clearInput() { held.clear(); latched.clear(); bits = 0; pendingEdges = 
 
 // Floating joystick: the ring appears under the thumb anywhere in the left zone.
 const stick = $('stick'), ring = stick.querySelector('.ring'), knob = stick.querySelector('.knob');
-let stickId = null, origin = null, stickHoriz = 0, dashTap = { dir: 0, time: 0, released: true };
+let stickId = null, origin = null, stickHoriz = 0, dashTap = { dir: 0, time: 0, released: true }, runHold = 0;
 function ringRadius() { return ring.offsetWidth / 2 || 60; }
-function placeRing(x, y) { const r = stick.getBoundingClientRect(); ring.style.left = (x - r.left) + 'px'; ring.style.top = (y - r.top) + 'px'; }
+const zones = stick.querySelectorAll('.zone');
+function placeRing(x, y) {
+  const r = stick.getBoundingClientRect(), R = ringRadius();
+  ring.style.left = (x - r.left) + 'px'; ring.style.top = (y - r.top) + 'px';
+  // The run zones sit just past the ring on both sides.
+  zones[0].style.left = (x - r.left - R * 1.32 - 10) + 'px'; zones[1].style.left = (x - r.left + R * 1.12) + 'px';
+  for (const z of zones) z.style.top = (y - r.top - 11) + 'px';
+}
 function resetStick() {
   stickId = null; origin = null; stick.classList.remove('active'); ring.style.left = ''; ring.style.top = '';
   knob.style.setProperty('--kx', '0px'); knob.style.setProperty('--ky', '0px');
-  if (stickHoriz) dashTap.released = true; stickHoriz = 0;
+  if (stickHoriz) dashTap.released = true; stickHoriz = 0; runHold = 0; stick.classList.remove('running');
 }
 function moveStick(x, y) {
   const R = ringRadius();
@@ -701,10 +715,15 @@ function moveStick(x, y) {
   if (dy < -R * 0.5) mask |= BIT.JUMP; else if (dy > R * 0.45) mask |= BIT.CROUCH;
   const horiz = mask & 3, now = performance.now();
   if (horiz && horiz !== stickHoriz) {
-    if (dashTap.dir === horiz && dashTap.released && now - dashTap.time < 300) { setSource('dash', BIT.DASH | horiz, 90); held.delete('dash'); haptic('medium'); dashTap.dir = 0; }
+    // Two flicks: a dash; held after the second one it runs on.
+    if (dashTap.dir === horiz && dashTap.released && now - dashTap.time < 300) { setSource('dash', BIT.DASH | horiz, 90); held.delete('dash'); haptic('medium'); dashTap.dir = 0; runHold = horiz; }
     else dashTap = { dir: horiz, time: now, released: false };
   }
   if (!horiz && stickHoriz) dashTap.released = true;
+  if (horiz !== runHold) runHold = 0;
+  // The thumb past the ring sideways runs (backing off: quicker).
+  if (horiz && (runHold || Math.abs(dx) > R * 1.02) && !(mask & BIT.CROUCH)) mask |= BIT.RUN;
+  stick.classList.toggle('running', !!(mask & BIT.RUN));
   if ((mask & BIT.JUMP) && !(held.get('stick') & BIT.JUMP)) haptic('light');
   stickHoriz = horiz;
   setSource('stick', mask);
@@ -748,7 +767,7 @@ smash.addEventListener('pointerdown', e => { e.preventDefault(); capture(smash, 
 for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) smash.addEventListener(type, e => setSource('s' + e.pointerId, 0));
 for (const el of [stick, pad, smash]) el.oncontextmenu = e => e.preventDefault();
 
-const keys = { KeyA: 1, ArrowLeft: 1, KeyD: 2, ArrowRight: 2, KeyS: 4, ArrowDown: 4, KeyJ: 8, KeyK: 16, Space: 32, KeyL: 64, KeyU: 128, KeyC: 256, KeyW: 512, ArrowUp: 512, KeyI: 1024, KeyQ: 2048 };
+const keys = { KeyA: 1, ArrowLeft: 1, KeyD: 2, ArrowRight: 2, KeyS: 4, ArrowDown: 4, KeyJ: 8, KeyK: 16, Space: 32, KeyL: 64, KeyU: 128, KeyC: 256, KeyW: 512, ArrowUp: 512, KeyI: 1024, KeyQ: 2048, ShiftLeft: 4096, ShiftRight: 4096 };
 window.addEventListener('keydown', e => { if (keys[e.code] && !$('help').open && fighting()) { e.preventDefault(); if (!e.repeat) setSource(e.code, keys[e.code]); } });
 window.addEventListener('keyup', e => { if (keys[e.code]) setSource(e.code, 0); });
 window.addEventListener('blur', clearInput); document.addEventListener('visibilitychange', clearInput);

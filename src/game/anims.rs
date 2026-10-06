@@ -497,8 +497,9 @@ impl Reaction {
         match action {
             1 => Reaction::HeadLight,
             17 => Reaction::HeadSide,
-            18 => Reaction::GutBig,
-            8 | 14 | 19 => Reaction::Gut,
+            18 | 25 => Reaction::GutBig,
+            8 | 14 | 19 | 26 => Reaction::Gut,
+            22 | 24 | 27 => Reaction::HeadSide,
             9 | 16 => Reaction::Low,
             _ => Reaction::Head,
         }
@@ -518,8 +519,10 @@ pub fn striker(action: u32) -> usize {
         1 | 17 => 0,
         2 | 10 | 11 => 1,
         4 | 14 | 19 => 4,
-        8 | 13 | 18 => 2,
-        9 | 12 | 16 => 3,
+        8 | 13 | 18 | 20 | 21 | 24 | 26 | 27 => 2,
+        9 | 12 | 16 | 25 => 3,
+        22 => 0,
+        23 => 1,
         _ => 0,
     }
 }
@@ -533,8 +536,11 @@ impl Library {
     }
 }
 
+/// Action ids the authored library covers (0..ACTIONS).
+pub const ACTIONS: usize = 28;
+
 pub fn library() -> Library {
-    let mut attacks: Vec<Option<Anim>> = (0..20).map(|_| None).collect();
+    let mut attacks: Vec<Option<Anim>> = (0..ACTIONS).map(|_| None).collect();
     attacks[1] = Some(jab());
     attacks[11] = Some(cross());
     attacks[2] = Some(overhead());
@@ -549,7 +555,17 @@ pub fn library() -> Library {
     attacks[16] = Some(low_kick());
     attacks[17] = Some(hook());
     attacks[18] = Some(side_kick());
-    let reach = (0..20u32)
+    // Command moves and jump attacks borrow the nearest authored pose: only
+    // a fighter without the captured take shows them.
+    attacks[20] = Some(air_kick());
+    attacks[21] = Some(air_kick());
+    attacks[22] = Some(cross());
+    attacks[23] = Some(uppercut());
+    attacks[24] = Some(roundhouse());
+    attacks[25] = Some(front_kick());
+    attacks[26] = Some(overhead());
+    attacks[27] = Some(roundhouse());
+    let reach = (0..ACTIONS as u32)
         .map(|action| {
             let (Some(anim), Some(m)) = (&attacks[action as usize], moves::attack(action)) else {
                 return 0.0;

@@ -165,6 +165,11 @@ body:not(.fighting) #combo-readout{display:none}
 #stick .ring{position:absolute;left:calc(var(--sl) + var(--pad-gap) + var(--ring) / 2 + 10px);top:calc(100% - var(--sb) - var(--pad-gap) - var(--ring) / 2 - 18px);width:var(--ring);height:var(--ring);margin:calc(var(--ring) / -2) 0 0 calc(var(--ring) / -2);border-radius:50%;border:2px solid #ffffff26;background:radial-gradient(circle,#57f0ce12 0,#ffffff06 60%,#ffffff0c 100%);transition:border-color .15s,opacity .2s;opacity:.75}
 #stick .knob{position:absolute;left:50%;top:50%;width:44%;height:44%;margin:-22% 0 0 -22%;border-radius:50%;background:#57f0ce38;border:2px solid #57f0cecc;box-shadow:0 0 18px #57f0ce40;transform:translate(var(--kx,0px),var(--ky,0px))}
 #stick.active .ring{border-color:#57f0ce90;opacity:1}
+/* Run zones: the thumb past the ring sideways runs; they show while the stick is held. */
+#stick .zone{position:absolute;top:0;font-style:normal;font-size:15px;font-weight:900;color:#57f0ce;opacity:0;pointer-events:none;transition:opacity .15s}
+#stick.active .zone{opacity:.45}
+#stick.running .zone{opacity:1;text-shadow:0 0 10px #57f0ce}
+#stick.running .ring{border-color:#57f0ce;box-shadow:0 0 22px #57f0ce55}
 #stick .ring:before,#stick .ring:after{content:"";position:absolute;left:50%;top:50%;border:6px solid transparent;margin:-6px}
 #stick .ring:before{border-bottom-color:#ffffff40;transform:translateY(calc(var(--ring) * -.40))}
 #stick .ring:after{border-top-color:#ffffff40;transform:translateY(calc(var(--ring) * .40))}

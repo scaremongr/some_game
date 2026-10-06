@@ -87,7 +87,7 @@ impl Player {
                 self.wait = 20;
                 return DASH | toward;
             }
-            return toward;
+            return if distance > 2600 { toward | RUN } else { toward };
         }
         let r = self.roll();
         let gap = |p: &mut Player| 8 + p.roll() % 5;

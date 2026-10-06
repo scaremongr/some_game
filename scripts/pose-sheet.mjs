@@ -11,8 +11,8 @@ process.env.PLAYWRIGHT_BROWSERS_PATH ||= resolve('.browsers');
 const { chromium } = await import('playwright');
 
 const [specPath, prefix = 'artifacts/poses/sheet'] = process.argv.slice(2);
-const attacks = {1:[7,20],11:[6,24],2:[21,47],4:[13,40],8:[11,30],9:[14,42],10:[12,46],12:[12,38],13:[7,28],14:[18,46],16:[8,24],17:[8,28],18:[12,34],19:[18,44]};
-const names = {1:'jab',11:'cross',2:'overhead',4:'throw',8:'front kick',9:'sweep',10:'uppercut',12:'roundhouse',13:'air kick',14:'impulse',16:'low kick',17:'hook',18:'side kick',19:'ground pound'};
+const attacks = {1:[7,20],11:[6,24],2:[21,47],4:[13,40],8:[11,30],9:[14,42],10:[12,46],12:[12,38],13:[7,28],14:[18,46],16:[8,24],17:[8,28],18:[12,34],19:[18,44],20:[5,22],21:[10,34],22:[9,26],23:[10,34],24:[15,36],25:[12,32],26:[17,46],27:[14,50]};
+const names = {1:'jab',11:'cross',2:'overhead',4:'throw',8:'front kick',9:'sweep',10:'uppercut',12:'roundhouse',13:'air kick',14:'impulse',16:'low kick',17:'hook',18:'side kick',19:'ground pound',20:'air bicycle',21:'air flip kick',22:'lunging hook',23:'rear uppercut',24:'advancing kick',25:'thrust kick',26:'butterfly kick',27:'hurricane kick'};
 function defaultSpec() {
   const shots = [
     { label: 'stance', f0: {}, f1: {} },
@@ -20,7 +20,7 @@ function defaultSpec() {
     { label: 'crouch', f0: { crouch: true }, f1: { crouch: true } },
   ];
   for (const [id, [hit, total]] of Object.entries(attacks)) {
-    const air = id === '13' ? { y: 650 } : {};
+    const air = ['13', '20', '21'].includes(id) ? { y: 650 } : {};
     for (const frame of [Math.max(1, hit - 5), hit, Math.round((hit + total) / 2)])
       shots.push({ label: `${names[id]} f${frame}`, f0: { action: +id, frame, ...air }, f1: {} });
   }

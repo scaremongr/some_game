@@ -64,6 +64,19 @@ pub fn band(action: u32, height: Height) -> (i32, i32) {
         19 => (0, 1100),
         // Low kick: at the knee, standing.
         16 => (100, 500),
+        // Jump knee: forward at the body; bicycle kick: down and forward.
+        20 => (150, 1100),
+        21 => (-250, 650),
+        // Lunging hook: head and chest; rear uppercut: tall, it meets jumps.
+        22 => (1000, 1650),
+        23 => (900, 2300),
+        // Advancing roundhouse: chest to head; thrust kick: the body.
+        24 => (900, 1650),
+        25 => (700, 1250),
+        // Flying knee: from above, onto a crouching head too.
+        26 => (950, 1700),
+        // Hurricane kick: the whole body height.
+        27 => (500, 1700),
         _ if height == Height::Low => (0, 280),
         _ => (900, 1500),
     }

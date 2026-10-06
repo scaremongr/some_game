@@ -48,7 +48,7 @@ try {
   await p.evaluate(() => window.__start());
   await p.waitForTimeout(200);
   const advance = ms => p.evaluate(ms => window.__frame(ms), ms);
-  const codes = { d: 'KeyD', a: 'KeyA', s: 'KeyS', c: 'KeyC', j: 'KeyJ', k: 'KeyK', u: 'KeyU', l: 'KeyL', w: 'KeyW' };
+  const codes = { d: 'KeyD', a: 'KeyA', s: 'KeyS', c: 'KeyC', j: 'KeyJ', k: 'KeyK', u: 'KeyU', l: 'KeyL', w: 'KeyW', i: 'KeyI', r: 'ShiftLeft' };
   let frame = 0;
   for (const part of script.split(',')) {
     const [keys, ms] = part.split(':');

@@ -28,7 +28,10 @@ fighting style (`style`: `allround`, `pressure` or `range`; the server calls
 (default `medea`).
 
 `bits`: left=1, right=2, block=4, jab=8, heavy=16, dash=32, grab=64,
-kick=128, crouch=256, jump=512, special=1024, room smash=2048.
+kick=128, crouch=256, jump=512, special=1024, room smash=2048, run=4096 (held:
+with forward it runs at `moves::run`, with back it backs off half again faster;
+running costs 2 stamina a tick and carries its speed into an attack). The
+server accepts bits up to 8191.
 Valid masks are 0..4095; discrete edge mask is 3832.
 Inputs are sent on change and at 30 Hz. `seq` is a monotonically increasing safe
 integer for the session, including after reconnect; browser initializes it from
@@ -111,7 +114,11 @@ in `combat/src/moves.rs` and also drives animation timing. Action IDs:
 0 idle, 1 jab, 2 overhead, 3 dash, 4 throw, 5 hitstun, 8 kick, 9 sweep,
 10 uppercut, 11 cross, 12 roundhouse, 13 air kick, 14 special, 15 knockdown,
 16 low kick (crouch + jab), 17 hook (third jab of J-J-J), 18 side kick (second
-kick of U-U), 19 room smash. IDs 6 and 7 are unused. Frame data per style:
+kick of U-U), 19 room smash, 20 jump bicycle kick (J in the air), 21 jump flip
+kick (K in the air), 22 lunging hook (forward + J), 23 rear uppercut (back + J),
+24 advancing roundhouse (forward + U), 25 thrust kick (back + U), 26 butterfly
+kick (forward + K), 27 hurricane kick (forward + special, 500 meter). Forward
+and back are toward and away from the opponent, from a standstill or a walk. IDs 6 and 7 are unused. Frame data per style:
 `moves::attack_for(style, action)`; walking `moves::walk`, dashing
 `moves::dash` (the pressure style's forward dash turns into an attack from
 frame 8).

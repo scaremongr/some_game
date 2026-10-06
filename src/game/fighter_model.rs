@@ -539,10 +539,10 @@ impl Avatar {
                     };
                     // An air attack ends in the air: the clip's own landing
                     // would show a grounded pose while the body still flies.
-                    if name == "air_kick" {
+                    if name.starts_with("air_") {
                         let hit = (marks.contact * clip.fps) as usize;
                         if let Some(land) = (hit..n).find(|&f| grounded(f)) {
-                            marks.end = marks.end.min(secs(land.saturating_sub(2))).max(marks.contact + 0.05);
+                            marks.end = marks.end.min(secs(land.saturating_sub(2))).max(marks.contact + 0.05).min(duration);
                         }
                     }
                     marks
@@ -793,6 +793,14 @@ impl FighterModel {
             Clip::Attack(16) => pick(&["low_kick", "kick"]),
             Clip::Attack(17) => pick(&["hook", "cross"]),
             Clip::Attack(18) => pick(&["side_kick", "kick"]),
+            Clip::Attack(20) => pick(&["air_bicycle", "air_kick"]),
+            Clip::Attack(21) => pick(&["air_flip", "air_kick"]),
+            Clip::Attack(22) => pick(&["lunge_hook", "hook", "cross"]),
+            Clip::Attack(23) => pick(&["rear_uppercut", "uppercut"]),
+            Clip::Attack(24) => pick(&["advance_kick", "roundhouse"]),
+            Clip::Attack(25) => pick(&["thrust", "kick"]),
+            Clip::Attack(26) => pick(&["butterfly", "heavy"]),
+            Clip::Attack(27) => pick(&["hurricane", "special"]),
             Clip::Air if jump_dir > 0.0 => pick(&["jump_fwd", "jump"]),
             Clip::Air if jump_dir < 0.0 => pick(&["jump_back", "jump"]),
             Clip::Air => pick(&["jump"]),
@@ -1237,7 +1245,16 @@ impl FighterModel {
                                     + (take.marks.end - take.marks.contact)
                                         * ((frame - hit) / (m.total as f32 - hit)).min(1.0)
                             };
-                            (t, if action == 13 { Travel::Air(1.0) } else { Travel::Return })
+                            // Jump attacks fly with the body; moves the
+                            // simulation carries forward travel with it.
+                            let travel = if moves::airborne(action) {
+                                Travel::Air(1.0)
+                            } else if moves::advance(action, m.startup) > 0 {
+                                Travel::InPlace
+                            } else {
+                                Travel::Return
+                            };
+                            (t, travel)
                         }
                         Clip::Air => {
                             // Progress along the ballistic arc from its launch
@@ -1655,6 +1672,20 @@ fn lean(character: &Character, pose: &mut Pose, globals: &mut Vec<Mat4>, bone: u
 
 /// The attack a strike take stands in for.
 fn take_action(key: &str) -> Option<u32> {
+    // Takes of the command moves and jump attacks, by their whole key.
+    if let Some(action) = match key {
+        "air_bicycle" => Some(20),
+        "air_flip" => Some(21),
+        "lunge_hook" => Some(22),
+        "rear_uppercut" => Some(23),
+        "advance_kick" => Some(24),
+        "thrust" => Some(25),
+        "butterfly" => Some(26),
+        "hurricane" => Some(27),
+        _ => None,
+    } {
+        return Some(action);
+    }
     Some(match key.split('_').next()? {
         "jab" => 1,
         "cross" => 11,
@@ -1750,7 +1781,7 @@ mod tests {
         }
         let mut game = arena_combat::Match::default();
         let v = view();
-        for action in 0..=19 {
+        for action in 0..anims::ACTIONS as u32 {
             game.fighters[1].action = action;
             game.fighters[1].down = if action == 15 { 40 } else { 0 };
             for frame in 0..72 {

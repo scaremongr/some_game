@@ -72,6 +72,24 @@ pub fn attack(action: u32) -> Option<Move> {
         // (towards a wall or the next room); safe by distance on block.
         18 => (12, 4, 34, 1720, 9, 28, 16, 100, 150, 0, Mid, false),
         19 => (18, 3, 44, 950, 12, 24, 10, 140, 45, 0, Mid, false),
+        // Jump attacks by button: J a quick knee, U the flying kick (13),
+        // K a bicycle kick that knocks down.
+        20 => (5, 5, 22, 1250, 6, 22, 12, 40, 30, 0, Overhead, false),
+        21 => (10, 6, 34, 1550, 12, 30, 16, 120, 60, 0, Overhead, true),
+        // Direction + button on the ground (toward / away from the opponent):
+        // forward J a lunging hook, plus on block (pressure); back J a rear-hand
+        // uppercut, an anti-air (a body in the air is launched).
+        22 => (9, 3, 26, 1100, 9, 26, 17, 70, 30, 0, Mid, false),
+        23 => (10, 4, 34, 1150, 9, 28, 12, 80, 30, 0, Mid, false),
+        // Forward U an advancing roundhouse that covers ground (`advance`);
+        // back U a thrust kick that pushes the opponent away.
+        24 => (15, 4, 36, 1650, 12, 30, 14, 120, 90, 0, Mid, false),
+        25 => (12, 4, 32, 1700, 9, 26, 17, 90, 200, 0, Mid, false),
+        // Forward K a flying knee: from above (beats a crouching guard),
+        // launches, very unsafe.
+        26 => (17, 4, 46, 1300, 13, 36, 14, 160, 40, 80, Overhead, true),
+        // Forward + special: a hurricane kick across the room (500 meter).
+        27 => (14, 10, 50, 1500, 18, 34, 22, 150, 160, 70, Mid, true),
         _ => return None,
     };
     Some(Move {
@@ -151,9 +169,34 @@ pub fn attack_for(style: u32, action: u32) -> Option<Move> {
 /// Walking speed of a style (mm/tick): forward, back.
 pub fn walk(style: u32) -> (i32, i32) {
     match style {
-        PRESSURE => (30, 18),
-        RANGE => (21, 22),
-        _ => (24, 20),
+        PRESSURE => (36, 22),
+        RANGE => (27, 27),
+        _ => (30, 24),
+    }
+}
+
+/// Running speed of a style (mm/tick, forward; `RUN` held). Backing off
+/// with `RUN` is half again the walk back.
+pub fn run(style: u32) -> i32 {
+    match style {
+        PRESSURE => 68,
+        RANGE => 56,
+        _ => 62,
+    }
+}
+
+/// Jump attacks: any of them once per jump.
+pub fn airborne(action: u32) -> bool {
+    matches!(action, 13 | 20 | 21)
+}
+
+/// Moves that carry the body forward (mm on this frame of the move).
+pub fn advance(action: u32, frame: u32) -> i32 {
+    match (action, frame) {
+        (24, 2..=13) => 32,
+        (26, 3..=16) => 42,
+        (27, 2..=30) => 50,
+        _ => 0,
     }
 }
 
@@ -186,6 +229,9 @@ pub fn cancel(action: u32, next: u32) -> bool {
                 | (16, 1)
                 | (16, 9)
                 | (16, 10)
+                | (22, 12)
+                | (22, 10)
+                | (23, 8)
         )
 }
 /// Follow-ups allowed when the attack was blocked: light strings keep the

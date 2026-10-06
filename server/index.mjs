@@ -310,7 +310,7 @@ export async function createArena(options = {}) {
         session.seen=Date.now();
         if(m.type==='ping') {send(session,{type:'pong',at:m.at});return;}
         if(m.type==='input') {
-          if(!Number.isSafeInteger(m.seq)||m.seq<=session.seq||!Number.isInteger(m.bits)||m.bits<0||m.bits>4095)return;
+          if(!Number.isSafeInteger(m.seq)||m.seq<=session.seq||!Number.isInteger(m.bits)||m.bits<0||m.bits>8191)return;
           session.seq=m.seq;session.pending|=(m.bits & ~session.input & 3832);session.input=m.bits;session.lastInput=Date.now();
           // The tick this input is applied at (the next step), echoed to the
           // client to tune its prediction clock.

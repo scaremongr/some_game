@@ -53,6 +53,16 @@ low_kick = 054 Mma Low Kick.glb
 # Strings: J-J-J ends with a lead hook, U-U with a side kick.
 hook = 032 Boxing Lead Hand Hook.glb
 side_kick = 056 Mma Side Kick.glb
+# Jump attacks by button (J bicycle kick, U flying side kick above, K a flip
+# into a kick from above) and the command moves (direction + button).
+air_bicycle = 070 Flying Bicycle Kick.glb
+air_flip = 151 Front Flip To Kick.glb @ 0.6-2.2
+lunge_hook = 038 Long Hook Punch To The Head.glb
+rear_uppercut = 040 Boxing Back Hand Uppercut.glb
+advance_kick = 059 Roundhouse Kick With Front Foot Advancing.glb
+thrust = 063 Male Thrust Kick With The Rear Foot.glb
+butterfly = 071 Butterfly Kick Advancing.glb @ 1.4-3.0
+hurricane = 069 Flying Hurricane Kick.glb
 # Hit reactions by blow: light jab, hook from the side, counter hit spins,
 # side kick doubles over.
 hit_light = 090 Receiving A Light Hit To The Head From A Straight Punch.glb

@@ -17,7 +17,13 @@ pub const CROUCH: u32 = 256;
 pub const JUMP: u32 = 512;
 pub const SPECIAL: u32 = 1024;
 pub const SMASH: u32 = 2048;
-pub const INPUT_MASK: u32 = 4095;
+/// Held with forward: run (`moves::run`); with back: back off quicker.
+pub const RUN: u32 = 4096;
+pub const INPUT_MASK: u32 = 8191;
+/// Stamina a tick of running costs (it does not recover while running).
+pub const RUN_COST: i32 = 2;
+/// Forward speed a running fighter carries into an attack (mm/tick).
+pub const RUN_CARRY: i32 = 28;
 pub const EDGE_MASK: u32 = LIGHT | HEAVY | DASH | THROW | KICK | JUMP | SPECIAL | SMASH;
 /// Ticks on the floor after a knockdown, including the visible wake-up.
 pub const KNOCKDOWN: u32 = 56;
@@ -96,6 +102,9 @@ pub struct Fighter {
     /// Getting up quickly (pressed up while on the floor).
     #[nserde(default)]
     pub quick_rise: bool,
+    /// Running forward this tick.
+    #[nserde(default)]
+    pub running: bool,
 }
 /// A throw holds its victim this long, from the grab to the slam.
 pub const HOLD: u32 = 32;
@@ -144,6 +153,7 @@ impl Fighter {
             parry_cooldown: 0,
             style: 0,
             quick_rise: false,
+            running: false,
         }
     }
     /// The attack this fighter is performing, with its style's frame data.
@@ -280,6 +290,14 @@ impl Match {
         if me.y > 0 && !me.air_attack && enemy.juggle > 0 && enemy.y > 0 && distance < 1500 {
             return KICK;
         }
+        // In the air: any of the three jump attacks.
+        if me.y > 200 && !me.air_attack && distance < 1500 {
+            return match roll(self.tick.wrapping_sub(me.frame) ^ 0xA1) {
+                0..=49 => KICK,
+                50..=74 => HEAVY,
+                _ => LIGHT,
+            };
+        }
         // A full bar breaks a real combo now and then, a moment after a hit.
         if (me.stun > 0 || (me.juggle > 0 && me.y > 0))
             && me.meter >= 1000
@@ -310,9 +328,6 @@ impl Match {
                 _ => {}
             }
         }
-        if me.y > 200 && distance < 1500 {
-            return KICK;
-        }
         // Pressure: a dash in ends in a jab, a low kick or a grab.
         if me.action == 3 && me.dash_dir == me.facing && me.frame >= moves::DASH_CANCEL && distance < 1150 {
             return match roll(self.tick.wrapping_sub(me.frame) ^ 0xDA) {
@@ -326,8 +341,10 @@ impl Match {
         // A jump coming in: an uppercut now and then, otherwise a guard.
         if enemy.y > 300 && me.y == 0 && distance < 1500 {
             let r = roll(window ^ 0xA11);
-            if r < 35 {
+            if r < 25 {
                 return CROUCH | HEAVY;
+            } else if r < 40 {
+                return away | LIGHT;
             } else if r < 70 {
                 return BLOCK;
             }
@@ -368,6 +385,8 @@ impl Match {
         }
         if distance > far {
             return match plan {
+                // Far off it runs in, closer it walks.
+                0..=74 if distance > far + 1200 => toward | RUN,
                 0..=74 => toward,
                 75..=84 if opening && distance < far + 600 => JUMP | toward,
                 85..=89 if opening && me.style == moves::PRESSURE => DASH | toward,
@@ -401,17 +420,22 @@ impl Match {
                     }
                 } else if distance > poke {
                     match pick {
-                        0..=44 => KICK,
-                        45..=64 => HEAVY,
-                        65..=74 if me.meter >= 500 => SPECIAL,
+                        0..=34 => KICK,
+                        35..=49 => toward | KICK,
+                        50..=62 => HEAVY,
+                        63..=68 => toward | HEAVY,
+                        69..=76 if me.meter >= 500 => toward | SPECIAL,
+                        77..=82 if me.meter >= 500 => SPECIAL,
                         _ => toward,
                     }
                 } else {
                     match pick {
-                        0..=29 => LIGHT,
-                        30..=44 => CROUCH | LIGHT,
-                        45..=59 => KICK,
-                        60..=69 => CROUCH | KICK,
+                        0..=24 => LIGHT,
+                        25..=32 => toward | LIGHT,
+                        33..=44 => CROUCH | LIGHT,
+                        45..=55 => KICK,
+                        56..=61 => away | KICK,
+                        62..=69 => CROUCH | KICK,
                         70..=77 => HEAVY,
                         78..=89 if distance < 1050 => THROW,
                         90..=94 => CROUCH | HEAVY,
@@ -535,6 +559,8 @@ impl Match {
         for i in 0..2 {
             let f = &mut self.fighters[i];
             let input = inputs[i] & INPUT_MASK;
+            let was_running = f.running;
+            f.running = false;
             f.invulnerable = f.invulnerable.saturating_sub(1);
             f.parry_cooldown = f.parry_cooldown.saturating_sub(1);
             f.combo_time = f.combo_time.saturating_sub(1);
@@ -632,6 +658,7 @@ impl Match {
                 if f.action == 3 && f.frame < 11 {
                     f.x += f.dash_dir * moves::dash(f.style, f.dash_dir == f.facing);
                 }
+                f.x += f.facing * moves::advance(f.action, f.frame);
                 // Combos continue on hit, light strings also on block, and a
                 // repeated button continues its string even on a whiff.
                 let cancel = f.attack().is_some_and(|m| {
@@ -680,34 +707,53 @@ impl Match {
                 let movement = i32::from(input & RIGHT != 0) - i32::from(input & LEFT != 0);
                 if f.y == 0 {
                     // Walking at the style's pace, guarded or crouched slowly;
-                    // the dash covers distance.
+                    // RUN held runs forward (stamina) or backs off quicker.
                     let (forward, back) = moves::walk(f.style);
+                    let run = input & RUN != 0 && !f.guard && !f.crouch && movement != 0 && f.stamina > 0;
+                    f.running = run && movement == f.facing;
                     f.x += movement
                         * if f.guard || f.crouch {
                             WALK_SLOW
                         } else if movement == f.facing {
-                            forward
+                            if run {
+                                moves::run(f.style)
+                            } else {
+                                forward
+                            }
+                        } else if run {
+                            back * 3 / 2
                         } else {
                             back
                         };
+                    if f.running {
+                        f.stamina = (f.stamina - RUN_COST).max(0);
+                    }
                 }
                 if buffered & JUMP != 0 && f.y == 0 {
                     f.vy = 112;
                     f.y = 1;
-                    f.vx = movement * 42;
+                    // A running jump carries further.
+                    f.vx = movement * if f.running || was_running { 60 } else { 42 };
+                    f.running = false;
                     f.guard = false;
                     f.crouch = false;
                     f.air_attack = false;
                     f.buffer_time = 0;
                 } else if candidate != 0 {
                     let cost = moves::attack_for(f.style, candidate).map_or(160, |m| m.cost);
+                    let meter = matches!(candidate, 14 | 27);
                     if f.stamina >= cost
-                        && (candidate != 14 || f.meter >= 500)
-                        && (f.y == 0 || (candidate == 13 && !f.air_attack))
+                        && (!meter || f.meter >= 500)
+                        && (f.y == 0 || (moves::airborne(candidate) && !f.air_attack))
                     {
                         f.stamina -= cost;
-                        if candidate == 14 {
+                        if meter {
                             f.meter -= 500;
+                        }
+                        // A running fighter carries its speed into the blow.
+                        if f.running || was_running {
+                            f.vx = f.facing * RUN_CARRY;
+                            f.running = false;
                         }
                         // Acting ends the wake-up (or breaker) protection.
                         f.invulnerable = 0;
@@ -725,7 +771,9 @@ impl Match {
                         f.dash_dir = if movement == 0 { -f.facing } else { movement };
                     }
                 }
-                f.stamina = (f.stamina + if f.guard { 3 } else { 6 }).min(1000);
+                if !f.running {
+                    f.stamina = (f.stamina + if f.guard { 3 } else { 6 }).min(1000);
+                }
             }
             f.x = f.x.clamp(-ARENA_LIMIT, ARENA_LIMIT);
         }
@@ -1046,7 +1094,7 @@ impl Match {
                         f.stun = 0;
                         f.action = 15;
                         f.juggle = 0;
-                    } else if f.action == 13 {
+                    } else if moves::airborne(f.action) {
                         f.action = 0;
                         f.frame = 0;
                     }
@@ -1089,8 +1137,15 @@ fn select_action(f: &Fighter, bits: u32) -> u32 {
     if bits & DASH != 0 {
         return 3;
     }
+    // Held toward or away from the opponent: the command moves (only from a
+    // standstill or a walk; strings keep their own order).
+    let toward = if f.facing > 0 { RIGHT } else { LEFT };
+    let away = if f.facing > 0 { LEFT } else { RIGHT };
+    let ground = f.y == 0 && f.action == 0 && bits & CROUCH == 0;
+    let forward = ground && bits & toward != 0 && bits & away == 0;
+    let back = ground && bits & away != 0 && bits & toward == 0;
     if bits & SPECIAL != 0 {
-        return 14;
+        return if forward { 27 } else { 14 };
     }
     if bits & THROW != 0 {
         return 4;
@@ -1103,6 +1158,10 @@ fn select_action(f: &Fighter, bits: u32) -> u32 {
             13
         } else if bits & CROUCH != 0 {
             9
+        } else if forward {
+            24
+        } else if back {
+            25
         } else {
             match f.action {
                 11 | 18 => 12,
@@ -1112,17 +1171,25 @@ fn select_action(f: &Fighter, bits: u32) -> u32 {
         };
     }
     if bits & HEAVY != 0 {
-        return if bits & CROUCH != 0 || matches!(f.action, 8 | 11 | 17) {
+        return if f.y > 0 {
+            21
+        } else if bits & CROUCH != 0 || matches!(f.action, 8 | 11 | 17) {
             10
+        } else if forward {
+            26
         } else {
             2
         };
     }
     if bits & LIGHT != 0 {
         return if f.y > 0 {
-            13
+            20
         } else if bits & CROUCH != 0 && f.action != 1 && f.action != 11 {
             16
+        } else if forward {
+            22
+        } else if back {
+            23
         } else {
             match f.action {
                 1 => 11,
@@ -1639,6 +1706,8 @@ mod tests {
         let (jab, low, cross, kick) = (adv(1), adv(16), adv(11), adv(8));
         let (special, heavy, sweep, uppercut, roundhouse) = (adv(14), adv(2), adv(9), adv(10), adv(12));
         let (hook, side_kick) = (adv(17), adv(18));
+        let (lunge, rear_uppercut, advancing, thrust) = (adv(22), adv(23), adv(24), adv(25));
+        let (knee, hurricane) = (adv(26), adv(27));
         eprintln!("block advantage {report}");
         assert!((-2..=0).contains(&jab), "jab {jab}");
         assert!((-4..=-2).contains(&low), "low kick {low}");
@@ -1651,6 +1720,106 @@ mod tests {
         assert!(roundhouse <= -8, "roundhouse {roundhouse}");
         assert!((-6..=-4).contains(&hook), "hook {hook}");
         assert!((-6..=-3).contains(&side_kick), "side kick {side_kick}");
+        // Command moves: the lunging hook keeps the initiative, the thrust kick is
+        // safe, the advancing roundhouse a little minus, the flying knee and
+        // the hurricane kick are punishable.
+        assert!((0..=2).contains(&lunge), "lunging hook {lunge}");
+        assert!(rear_uppercut <= -6, "rear uppercut {rear_uppercut}");
+        assert!((-8..=-4).contains(&advancing), "advancing roundhouse {advancing}");
+        assert!((-4..=0).contains(&thrust), "thrust kick {thrust}");
+        assert!(knee <= -12, "flying knee {knee}");
+        assert!(hurricane <= -8, "hurricane {hurricane}");
+    }
+    #[test]
+    fn running_covers_ground_and_carries_into_a_blow() {
+        let travel = |input: u32| {
+            let mut m = duel();
+            m.fighters[0].x = -6000;
+            let x = m.fighters[0].x;
+            run(&mut m, [input, 0], 30);
+            (m.fighters[0].x - x, m.fighters[0].stamina)
+        };
+        let (walked, _) = travel(RIGHT);
+        let (ran, stamina) = travel(RIGHT | RUN);
+        assert_eq!(walked, 30 * moves::walk(0).0);
+        assert_eq!(ran, 30 * moves::run(0));
+        assert_eq!(stamina, 1000 - 30 * RUN_COST, "running costs stamina");
+        let (backed, _) = travel(LEFT | RUN);
+        assert_eq!(backed, -30 * moves::walk(0).1 * 3 / 2);
+        // A jab out of a run slides in with it; a guard stops the run.
+        let mut m = duel();
+        m.fighters[0].x = -3000;
+        run(&mut m, [RIGHT | RUN, 0], 10);
+        assert!(m.fighters[0].running);
+        m.step([RIGHT | RUN | LIGHT, 0]);
+        assert_eq!(m.fighters[0].action, 22, "forward + punch while running: the lunging hook");
+        assert!(m.fighters[0].vx > 0);
+        let mut guarded = duel();
+        guarded.fighters[0].x = -3000;
+        run(&mut guarded, [RIGHT | RUN | BLOCK, 0], 10);
+        assert!(!guarded.fighters[0].running);
+    }
+    #[test]
+    fn direction_and_button_pick_the_command_moves() {
+        let first = |input: u32, meter: i32| {
+            let mut m = duel();
+            m.fighters[0].meter = meter;
+            m.step([input, 0]);
+            m.fighters[0].action
+        };
+        assert_eq!(first(LIGHT, 0), 1);
+        assert_eq!(first(RIGHT | LIGHT, 0), 22);
+        assert_eq!(first(LEFT | LIGHT, 0), 23);
+        assert_eq!(first(RIGHT | KICK, 0), 24);
+        assert_eq!(first(LEFT | KICK, 0), 25);
+        assert_eq!(first(RIGHT | HEAVY, 0), 26);
+        assert_eq!(first(LEFT | HEAVY, 0), 2);
+        assert_eq!(first(RIGHT | SPECIAL, 600), 27);
+        assert_eq!(first(RIGHT | SPECIAL, 100), 0, "no meter, no hurricane");
+        assert_eq!(first(RIGHT | CROUCH | LIGHT, 0), 16, "crouching keeps the low set");
+        // The right-hand fighter faces left: its forward is LEFT.
+        let mut m = duel();
+        m.step([0, LEFT | KICK]);
+        assert_eq!(m.fighters[1].action, 24);
+        // A string keeps its order whatever the stick says.
+        let mut s = duel();
+        run(&mut s, [LIGHT, 0], 2);
+        run(&mut s, [0, 0], 7);
+        run(&mut s, [RIGHT | LIGHT, 0], 3);
+        run(&mut s, [RIGHT, 0], 12);
+        assert_eq!(s.fighters[0].action, 11);
+        // The advancing roundhouse and the flying knee carry the body.
+        let mut a = duel();
+        a.fighters[0].x = -3000;
+        a.fighters[1].x = 3000;
+        run(&mut a, [RIGHT | KICK, 0], 20);
+        assert!(a.fighters[0].x > -3000 + 300, "advanced {}", a.fighters[0].x + 3000);
+    }
+    #[test]
+    fn each_button_has_its_jump_attack_once_per_jump() {
+        for (button, action) in [(LIGHT, 20), (KICK, 13), (HEAVY, 21)] {
+            let mut m = duel();
+            m.fighters[0].x = -3000;
+            m.step([JUMP | RIGHT, 0]);
+            run(&mut m, [0, 0], 6);
+            m.step([button, 0]);
+            m.step([0, 0]);
+            assert_eq!(m.fighters[0].action, action);
+            run(&mut m, [0, 0], 30);
+            m.step([button, 0]);
+            let f = &m.fighters[0];
+            assert!(f.y > 0 && !(moves::airborne(f.action) && f.frame <= 1), "a second jump attack in the same jump");
+            run(&mut m, [0, 0], 60);
+            assert_eq!((m.fighters[0].y, m.fighters[0].action), (0, 0), "lands out of it");
+        }
+        // The bicycle kick knocks a standing opponent down.
+        let mut m = duel();
+        m.fighters[0].y = 600;
+        m.fighters[0].vy = -10;
+        m.fighters[0].action = 21;
+        m.fighters[0].air_attack = true;
+        run(&mut m, [0, 0], 20);
+        assert!(m.fighters[1].hp < 100 && m.fighters[1].down > 0, "knocked down");
     }
     #[test]
     fn low_kick_opens_a_standing_guard_and_links_into_the_uppercut() {
